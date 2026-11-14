@@ -25,7 +25,7 @@
       "hardenedRuntime": false,
       "target": "dmg"
     },
-    "productName": "Bibliothèque Aviation",
+    "productName": "Bibliotheque Aviation",
     "publish": {
       "provider": "github",
       "owner": "juliengoffauxdu60",
@@ -61,6 +61,6 @@
     "start": "electron .",
     "test": "node test/search.test.mjs"
   },
-  "version": "1.1.0",
+  "version": "1.1.1",
   "type": "module"
 }
