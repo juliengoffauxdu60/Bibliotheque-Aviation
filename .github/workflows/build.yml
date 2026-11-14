@@ -1,0 +1,105 @@
+# Build — Bibliothèque Aviation (Electron)
+#
+# Dépôt : juliengoffauxdu60/Recherche-POH (privé). Un seul workflow, deux
+# jobs en série : Windows construit et publie d'abord, macOS ensuite.
+#
+# POURQUOI UN SEUL WORKFLOW (leçon des v1.0.0 / v1.1.0, 14 nov. 2026) :
+# avec deux workflows parallèles, les deux jobs publiaient en même temps
+# vers la même Release et electron-builder créait la Release deux fois
+# (deux Releases v1.0.0, actifs partagés entre les deux ; v1.1.0 : le job
+# macOS a échoué en 422 « Release already_exists »). Le `needs` ci-dessous
+# sérialise la publication : un seul créateur, l'autre ajoute ses fichiers.
+#
+# POURQUOI LES SCRIPTS :ci : --publish onTag publie dès que le commit
+# courant porte un tag, même pour un run déclenché par un push sur main
+# (c'est ce qui a fait publier les runs main de la v1.1.0). Les runs main
+# utilisent donc les scripts :ci (--publish never) et ne touchent jamais
+# aux Releases ; seuls les runs déclenchés par un tag v* publient.
+#
+# Chaque push sur main produit les installateurs en artefacts. Chaque tag
+# v* publie en plus une Release GitHub avec l'exe et les DMG en
+# téléchargement direct. Le DMG n'est ni signé ni notarié (pas de compte
+# Apple Developer) : à la première ouverture sur un Mac, faire clic droit
+# puis Ouvrir. Pas de DMG universel : le fusionneur d'electron-builder
+# refuse le module natif canvas (@napi-rs/canvas-darwin-arm64), identique
+# dans les deux builds et non couvert par une règle x64ArchFiles — donc
+# deux DMG séparés, arm64 (Apple Silicon) et x64 (Intel).
+name: Build
+
+permissions:
+  contents: write
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Installer les dépendances
+        run: npm ci
+
+      - name: Tests du moteur de recherche
+        run: npm test
+
+      - name: Construire l'installateur Windows
+        # Tag v* -> dist (publie la Release) ; sinon dist:ci (jamais).
+        run: npm run ${{ startsWith(github.ref, 'refs/tags/') && 'dist' || 'dist:ci' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publier l'installateur (.exe + .blockmap)
+        uses: actions/upload-artifact@v4
+        with:
+          name: bibliotheque-aviation-windows
+          path: |
+            dist/*.exe
+            dist/*.blockmap
+          if-no-files-found: error
+
+  build-macos:
+    runs-on: macos-latest
+    needs: build-windows
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Installer les dépendances
+        run: npm ci
+
+      - name: Tests du moteur de recherche
+        run: npm test
+
+      - name: Construire les DMG macOS
+        # Tag v* -> dist:mac (ajoute les DMG à la Release créée par
+        # Windows) ; sinon dist:mac:ci (jamais).
+        run: npm run ${{ startsWith(github.ref, 'refs/tags/') && 'dist:mac' || 'dist:mac:ci' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publier les DMG (.dmg + .blockmap)
+        uses: actions/upload-artifact@v4
+        with:
+          name: bibliotheque-aviation-macos
+          path: |
+            dist/*.dmg
+            dist/*.blockmap
+          if-no-files-found: error
