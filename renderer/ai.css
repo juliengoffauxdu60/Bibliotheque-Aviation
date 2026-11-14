@@ -1,0 +1,71 @@
+/* Réglages IA + « Poser une question » — styles (même palette que styles.css). */
+
+/* Bouton « Réglages IA » dans l'en-tête (patch index.html). */
+.app-header { position: relative; }
+.header-ai-btn {
+  position: absolute; top: 14px; right: 22px;
+  padding: 8px 14px; font-size: 13px; font-weight: 600;
+  color: #fff; background: transparent; border: 1px solid #cfe3f2; border-radius: 8px;
+}
+.header-ai-btn:hover { background: rgba(255,255,255,.12); }
+@media (max-width: 900px) {
+  .header-ai-btn { top: 10px; right: 12px; }
+}
+
+/* Zone « Poser une question » (patch index.html, pleine largeur sous Outils). */
+.ai-ask { margin-top: 18px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
+.ai-ask > h2 { margin: 0 0 4px; font-size: 16px; }
+.ai-ask-note { margin: 0 0 10px; font-size: 13px; color: var(--muted); }
+.ai-notice {
+  background: #fff3c4; border: 1px solid #e8d27a; color: #5c4a00;
+  border-radius: 8px; padding: 10px 12px; font-size: 14px; margin: 0 0 10px;
+}
+.ai-notice button {
+  padding: 5px 10px; border-radius: 6px; border: 1px solid var(--blue);
+  background: var(--blue); color: #fff; font-weight: 600; font-size: 13px; margin-left: 6px;
+}
+#aiQuestion {
+  width: 100%; padding: 10px 12px; font: inherit; font-size: 15px;
+  border: 1px solid var(--line); border-radius: 8px; resize: vertical; min-height: 64px;
+}
+.ai-ask-row { display: flex; align-items: center; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+#aiAskBtn {
+  padding: 10px 22px; font-size: 15px; font-weight: 600; color: #fff;
+  background: var(--accent); border: 1px solid var(--accent); border-radius: 8px;
+}
+#aiAskBtn:disabled { opacity: .5; cursor: default; }
+.ai-ask-status { font-size: 13px; color: var(--muted); min-height: 1.2em; }
+.ai-answer {
+  margin-top: 12px; border-top: 1px solid #edf1f4; padding-top: 10px;
+  font-size: 15px; white-space: normal;
+}
+.ai-answer p { margin: 0 0 8px; }
+.ai-sources { margin-top: 6px; }
+.ai-sources h3 { margin: 0 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.ai-source {
+  display: block; text-align: left; width: 100%; margin-bottom: 6px;
+  padding: 7px 10px; font-size: 13px; border-radius: 8px;
+  border: 1px solid var(--line); background: #f7f9fb; color: var(--blue-dark);
+}
+.ai-source:hover { border-color: var(--blue); }
+.ai-source-text { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+
+/* Page Réglages IA (fenêtre séparée). */
+.ai-settings-page { background: var(--bg); }
+.ai-settings { max-width: 680px; margin: 0 auto; padding: 22px 22px 30px; }
+.ai-settings h1 { margin: 0 0 8px; font-size: 22px; }
+.ai-privacy { font-size: 14px; background: var(--blue-soft); border: 1px solid #c8dcec; border-radius: 8px; padding: 10px 12px; }
+.ai-settings label { display: block; font-weight: 700; font-size: 14px; margin: 16px 0 5px; }
+.ai-settings select, .ai-settings input {
+  width: 100%; padding: 10px 12px; font: inherit; font-size: 15px;
+  border: 1px solid var(--line); border-radius: 8px; background: #fff;
+}
+.ai-note { font-size: 12px; color: var(--muted); margin: 5px 0 0; }
+.ai-settings-actions { display: flex; gap: 10px; margin-top: 20px; flex-wrap: wrap; }
+.ai-settings-actions button {
+  padding: 10px 18px; font-size: 14px; font-weight: 600; border-radius: 8px;
+  border: 1px solid var(--blue); background: var(--blue); color: #fff;
+}
+.ai-settings-actions button.ai-danger { background: #fff; color: #a33; border-color: #d8a3a3; }
+.ai-status { font-size: 14px; min-height: 1.4em; margin: 12px 0 0; font-weight: 600; }
+.ai-status.ai-error { color: #a33; }

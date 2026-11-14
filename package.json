@@ -1,0 +1,53 @@
+{
+  "author": "Jarvis pour Julien Goffaux",
+  "build": {
+    "appId": "ca.airrichelieu.recherche-poh",
+    "files": [
+      "main.js",
+      "main-import.js",
+      "main-ai.js",
+      "import-core.js",
+      "preload.cjs",
+      "renderer/**/*",
+      "assets/**/*",
+      "data/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/tesseract.js/**/*",
+      "node_modules/tesseract.js-core/**/*"
+    ],
+    "linux": {
+      "target": "AppImage"
+    },
+    "mac": {
+      "target": "dmg"
+    },
+    "productName": "Recherche POH",
+    "win": {
+      "target": "nsis"
+    }
+  },
+  "dependencies": {
+    "pdfjs-dist": "^6.5.438",
+    "tesseract.js": "^6.0.1"
+  },
+  "description": "Recherche plein texte dans les POH Cessna 172N, 172R, 150N et le SOP C150 (Air Richelieu), avec lecteur PDF intégré. Application desktop Electron, 100 % locale, hors réseau.",
+  "devDependencies": {
+    "electron": "^45.3.2",
+    "electron-builder": "^26.18.0"
+  },
+  "license": "UNLICENSED",
+  "main": "main.js",
+  "name": "recherche-poh",
+  "private": true,
+  "scripts": {
+    "build": "electron-builder",
+    "dist": "electron-builder --win",
+    "selftest": "node scripts/selftest.js",
+    "start": "electron .",
+    "test": "node test/search.test.mjs"
+  },
+  "version": "1.0.0",
+  "type": "module"
+}

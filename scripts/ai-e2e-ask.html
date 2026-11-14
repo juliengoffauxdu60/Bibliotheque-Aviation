@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Poser une question — test E2E IA</title>
+<link rel="stylesheet" href="app://renderer/styles.css">
+<link rel="stylesheet" href="app://renderer/ai.css">
+</head>
+<body>
+<main>
+  <!-- Copie EXACTE de la section proposée dans le patch index.html. -->
+  <section class="ai-ask" id="aiAskSection" aria-label="Poser une question">
+    <h2>Poser une question</h2>
+    <p class="ai-ask-note">L'IA répond uniquement à partir des POH chargés dans l'application. Elle cite le document, la section et la page.</p>
+    <div id="aiNotConfigured" class="ai-notice" hidden>
+      Aucune IA n'est configurée. <button type="button" id="aiOpenSettingsBtn1">Configurer dans « Réglages IA »</button>
+    </div>
+    <label class="sr-only" for="aiQuestion">Votre question</label>
+    <textarea id="aiQuestion" rows="3" placeholder="Ex. : Quelle est la vitesse de décrochage du 172N en configuration d'atterrissage ?"></textarea>
+    <div class="ai-ask-row">
+      <button type="button" id="aiAskBtn">Demander à l'IA</button>
+      <span id="aiAskStatus" class="ai-ask-status" aria-live="polite"></span>
+    </div>
+    <div id="aiAnswer" class="ai-answer" hidden></div>
+    <div id="aiSources" class="ai-sources" hidden></div>
+  </section>
+</main>
+<script>
+  // Faux window.__poh (l'appli réelle l'expose via app.js) : enregistre les
+  // appels de navigation des sources, sans lecteur PDF.
+  window.__poh = {
+    goToDoc: async (id) => { window.__pohCalled = { doc: id }; return {}; },
+    goToPage: async (n) => { window.__pohCalled = { ...(window.__pohCalled || {}), page: n }; return {}; },
+  };
+</script>
+<script type="module" src="app://renderer/ai.js"></script>
+</body>
+</html>

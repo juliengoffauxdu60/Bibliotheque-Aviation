@@ -1,0 +1,48 @@
+# Build Windows — Recherche POH (Electron)
+#
+# Dépôt : juliengoffauxdu60/Recherche-POH (privé). Chaque push sur main et
+# chaque tag v* produira l'installateur Windows (.exe NSIS) en artefact.
+# Les PDF des POH et les données OCR (binaires) ne passent pas par le
+# connecteur GitHub de Muse (fichiers UTF-8 seulement) : ils doivent être
+# ajoutés au dépôt via l'interface web de GitHub (voir README.md).
+#
+# Le build Windows est fait sur runner windows-latest (pas de
+# cross-compilation Linux : electron-builder + NSIS + signature).
+name: Build Windows
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Installer les dépendances
+        run: npm ci
+
+      - name: Tests du moteur de recherche
+        run: npm test
+
+      - name: Construire l'installateur Windows
+        run: npm run dist
+
+      - name: Publier l'installateur (.exe + .blockmap)
+        uses: actions/upload-artifact@v4
+        with:
+          name: recherche-poh-windows
+          path: |
+            dist/*.exe
+            dist/*.blockmap
+          if-no-files-found: error

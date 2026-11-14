@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Réglages IA — Recherche POH</title>
+<link rel="stylesheet" href="./styles.css">
+<link rel="stylesheet" href="./ai.css">
+</head>
+<body class="ai-settings-page">
+<main class="ai-settings">
+  <h1>Réglages IA</h1>
+  <p class="ai-privacy">Votre clé reste sur votre ordinateur : elle est chiffrée par votre système et n’est envoyée qu’au fournisseur que vous avez choisi.</p>
+  <p id="aiEncryptionNote" class="ai-note" hidden></p>
+
+  <form id="aiSettingsForm">
+    <label for="aiProvider">Fournisseur</label>
+    <select id="aiProvider"></select>
+    <p id="aiProviderHelp" class="ai-note"></p>
+
+    <label for="aiModel">Modèle</label>
+    <input id="aiModel" type="text" autocomplete="off" spellcheck="false">
+    <p class="ai-note">Nom du modèle chez le fournisseur. Si le fournisseur refuse ce nom, mettez le nom du modèle actuel (il change de temps en temps).</p>
+
+    <label for="aiEndpoint">Adresse du point de terminaison</label>
+    <input id="aiEndpoint" type="text" autocomplete="off" spellcheck="false">
+    <p class="ai-note">Pour Gemini, l’adresse contient {model} : le nom du modèle est inséré automatiquement. Pour une IA locale, c’est l’adresse de votre ordinateur (Ollama : http://localhost:11434/v1/chat/completions — LM Studio : http://localhost:1234/v1/chat/completions).</p>
+
+    <label for="aiKey">Clé API</label>
+    <input id="aiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Collez votre clé ici">
+    <p id="aiKeyState" class="ai-note">Aucune clé enregistrée.</p>
+
+    <div class="ai-settings-actions">
+      <button type="submit" id="aiSaveBtn">Enregistrer</button>
+      <button type="button" id="aiTestBtn">Tester la connexion</button>
+      <button type="button" id="aiClearKeyBtn" class="ai-danger">Effacer la clé</button>
+    </div>
+    <p id="aiSettingsStatus" class="ai-status" aria-live="polite"></p>
+  </form>
+
+  <p class="ai-note">Un seul fournisseur est actif à la fois. La recherche et le lecteur PDF fonctionnent toujours sans IA, même sans Internet.</p>
+</main>
+<script type="module" src="./ai-settings.js"></script>
+</body>
+</html>
