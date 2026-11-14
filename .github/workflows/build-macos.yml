@@ -2,12 +2,17 @@
 #
 # Dépôt : juliengoffauxdu60/Recherche-POH (privé). Chaque push sur main
 # produira deux DMG macOS en artefact : un pour Apple Silicon (arm64) et
-# un pour Intel (x64). Pas de DMG universel : le fusionneur d'electron-
+# un pour Intel (x64). Chaque tag v* publiera en plus une Release GitHub
+# avec les DMG en téléchargement direct (electron-builder --publish onTag).
+# Pas de DMG universel : le fusionneur d'electron-
 # builder refuse le module natif canvas (@napi-rs/canvas-darwin-arm64),
 # identique dans les deux builds et non couvert par une règle x64ArchFiles.
 # Le DMG n'est ni signé ni notarié (pas de compte Apple Developer) : à la
 # première ouverture sur un Mac, faire clic droit puis Ouvrir.
 name: Build macOS
+
+permissions:
+  contents: write
 
 on:
   push:
@@ -36,6 +41,8 @@ jobs:
 
       - name: Construire les DMG macOS
         run: npm run dist:mac
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publier les DMG (.dmg + .blockmap)
         uses: actions/upload-artifact@v4

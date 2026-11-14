@@ -1,7 +1,9 @@
 # Build Windows — Recherche POH (Electron)
 #
-# Dépôt : juliengoffauxdu60/Recherche-POH (privé). Chaque push sur main et
-# chaque tag v* produira l'installateur Windows (.exe NSIS) en artefact.
+# Dépôt : juliengoffauxdu60/Recherche-POH (privé). Chaque push sur main
+# produira l'installateur Windows (.exe NSIS) en artefact. Chaque tag v*
+# publiera en plus une Release GitHub avec l'installateur en téléchargement
+# direct (electron-builder --publish onTag).
 # Les PDF des POH et les données OCR (binaires) ne passent pas par le
 # connecteur GitHub de Muse (fichiers UTF-8 seulement) : ils doivent être
 # ajoutés au dépôt via l'interface web de GitHub (voir README.md).
@@ -9,6 +11,9 @@
 # Le build Windows est fait sur runner windows-latest (pas de
 # cross-compilation Linux : electron-builder + NSIS + signature).
 name: Build Windows
+
+permissions:
+  contents: write
 
 on:
   push:
@@ -37,6 +42,8 @@ jobs:
 
       - name: Construire l'installateur Windows
         run: npm run dist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publier l'installateur (.exe + .blockmap)
         uses: actions/upload-artifact@v4

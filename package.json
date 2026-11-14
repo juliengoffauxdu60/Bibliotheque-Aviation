@@ -24,6 +24,12 @@
       "target": "dmg"
     },
     "productName": "Recherche POH",
+    "publish": {
+      "provider": "github",
+      "owner": "juliengoffauxdu60",
+      "repo": "Recherche-POH",
+      "releaseType": "release"
+    },
     "win": {
       "target": "nsis"
     }
@@ -41,10 +47,14 @@
   "main": "main.js",
   "name": "recherche-poh",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/juliengoffauxdu60/Recherche-POH.git"
+  },
   "scripts": {
-    "build": "electron-builder --publish never",
-    "dist": "electron-builder --win --publish never",
-    "dist:mac": "electron-builder --mac --x64 --arm64 --publish never",
+    "build": "electron-builder --publish onTag",
+    "dist": "electron-builder --win --publish onTag",
+    "dist:mac": "electron-builder --mac --x64 --arm64 --publish onTag",
     "selftest": "node scripts/selftest.js",
     "start": "electron .",
     "test": "node test/search.test.mjs"
