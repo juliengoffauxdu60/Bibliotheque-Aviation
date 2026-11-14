@@ -1,4 +1,4 @@
-// Processus principal — Recherche POH (Electron).
+// Processus principal — Bibliothèque Aviation (Electron).
 // 100 % local, hors réseau : aucun appel réseau, les PDF / index / pdf.js sont
 // servis depuis le dossier de l'application via le protocole personnalisé « app:// ».
 import { app, BrowserWindow, protocol } from 'electron';
@@ -33,7 +33,7 @@ function createWindow() {
   const win = new BrowserWindow({
     width: parseInt(process.env.POH_WIDTH || '1440', 10),
     height: parseInt(process.env.POH_HEIGHT || '900', 10),
-    title: 'Recherche POH — Air Richelieu',
+    title: 'Bibliothèque Aviation — Air Richelieu',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       nodeIntegration: false,
@@ -229,6 +229,18 @@ async function runSelfTest(win) {
   await step('centrage « Plus grand » : milieu de page au milieu de la vue',
     `window.__poh.goToPage(72).then(() => window.__poh.centeringInfo())`,
     (v) => { try { const o = JSON.parse(v); return o.mode === 'large' && Math.abs(o.offsetPx) <= 3; } catch { return false; } });
+
+  await step('zoom 150 % : canevas 1,5× plus large, page toujours centrée',
+    `(() => { const b = JSON.parse(window.__poh.zoomInfo()); window.__zoomBase = b.canvasCssWidth; return window.__poh.setZoom(150).then(() => { const z = JSON.parse(window.__poh.zoomInfo()); window.__zoomW = z.canvasCssWidth; return 'base=' + b.canvasCssWidth + ' zoom=' + z.canvasCssWidth + ' off=' + z.offsetPx + ' label=' + z.label; }); })()`,
+    (v) => { const m = /base=(\d+) zoom=(\d+) off=(-?\d+) label=(.*)/.exec(v); if (!m) return false; const base = +m[1], zoom = +m[2]; return zoom / base >= 1.48 && zoom / base <= 1.52 && Math.abs(+m[3]) <= 3 && m[4] === '150 %'; });
+
+  await step('zoom conservé après changement de page (72 -> 73)',
+    `window.__poh.goToPage(73).then(() => { const z = JSON.parse(window.__poh.zoomInfo()); return 'pct=' + z.zoomPct + ' w=' + z.canvasCssWidth + ' attendu=' + window.__zoomW; })`,
+    (v) => { const m = /pct=(\d+) w=(\d+) attendu=(\d+)/.exec(v); return !!m && +m[1] === 150 && +m[2] === +m[3]; });
+
+  await step('retour à 100 % : canevas à sa largeur de base, boutons −/+ réactivés',
+    `window.__poh.setZoom(100).then(() => { const z = JSON.parse(window.__poh.zoomInfo()); return 'pct=' + z.zoomPct + ' w=' + z.canvasCssWidth + ' base=' + window.__zoomBase + ' out=' + z.zoomOutDisabled + ' in=' + z.zoomInDisabled; })`,
+    (v) => { const m = /pct=(\d+) w=(\d+) base=(\d+) out=(\w+) in=(\w+)/.exec(v); return !!m && +m[1] === 100 && +m[2] === +m[3] && m[4] === 'false' && m[5] === 'false'; });
 
   await step('mode « Page entière » : page visible sans défilement',
     `window.__poh.setMode('fit').then(() => window.__poh.centeringInfo())`,

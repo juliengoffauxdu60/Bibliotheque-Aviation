@@ -1,7 +1,7 @@
 {
   "author": "Jarvis pour Julien Goffaux",
   "build": {
-    "appId": "ca.airrichelieu.recherche-poh",
+    "appId": "ca.airrichelieu.bibliotheque-aviation",
     "files": [
       "main.js",
       "main-import.js",
@@ -23,7 +23,7 @@
     "mac": {
       "target": "dmg"
     },
-    "productName": "Recherche POH",
+    "productName": "Bibliothèque Aviation",
     "publish": {
       "provider": "github",
       "owner": "juliengoffauxdu60",
@@ -38,14 +38,14 @@
     "pdfjs-dist": "^6.5.438",
     "tesseract.js": "^6.0.1"
   },
-  "description": "Recherche plein texte dans les POH Cessna 172N, 172R, 150N et le SOP C150 (Air Richelieu), avec lecteur PDF intégré. Application desktop Electron, 100 % locale, hors réseau.",
+  "description": "Recherche plein texte dans les documents d'aviation (POH, AIM, RAC...), avec lecteur PDF intégré, ajout de documents et OCR. Application desktop Electron, 100 % locale, hors réseau.",
   "devDependencies": {
     "electron": "^45.3.2",
     "electron-builder": "^26.18.0"
   },
   "license": "UNLICENSED",
   "main": "main.js",
-  "name": "recherche-poh",
+  "name": "bibliotheque-aviation",
   "private": true,
   "repository": {
     "type": "git",
@@ -59,6 +59,6 @@
     "start": "electron .",
     "test": "node test/search.test.mjs"
   },
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module"
 }

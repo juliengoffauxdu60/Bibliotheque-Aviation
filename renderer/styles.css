@@ -1,4 +1,4 @@
-/* Recherche POH — styles. Bureau d'abord (1440×900), adaptable aux petites fenêtres. */
+/* Bibliothèque Aviation — styles. Bureau d'abord (1440×900), adaptable aux petites fenêtres. */
 * { box-sizing: border-box; }
 :root {
   --blue: #14558a; --blue-dark: #0d3d66; --blue-soft: #e8f1f8;
@@ -132,6 +132,9 @@ main { padding: 14px 22px 8px; }
 }
 .floating-nav button:disabled { opacity: .45; cursor: default; }
 .floating-nav .page-counter { font-size: 13px; font-weight: 700; white-space: nowrap; padding: 0 4px; }
+/* Zoom : même barre flottante que la navigation de page, séparateur fin. */
+.floating-nav .zoom-sep { width: 1px; height: 22px; background: #5a6b7a; margin: 0 2px; }
+.floating-nav .zoom-label { font-size: 13px; font-weight: 700; white-space: nowrap; padding: 0 2px; min-width: 52px; text-align: center; }
 .sections-menu-wrap { position: relative; }
 .sections-menu {
   position: absolute; bottom: calc(100% + 10px); left: 50%; transform: translateX(-50%);

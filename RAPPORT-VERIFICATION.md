@@ -1,4 +1,4 @@
-# Rapport de vérification — Recherche POH (desktop)
+# Rapport de vérification — Bibliothèque Aviation (desktop)
 
 Date : 14 novembre 2026. Vérifié par tests réels dans l'application
 (Electron lancé sous Xvfb), pas par revue de code seule.

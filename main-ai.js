@@ -114,7 +114,7 @@ function openSettingsWindow() {
     height: 720,
     minWidth: 640,
     minHeight: 560,
-    title: 'Réglages IA — Recherche POH',
+    title: 'Réglages IA — Bibliothèque Aviation',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       nodeIntegration: false,

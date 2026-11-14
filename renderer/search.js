@@ -1,4 +1,4 @@
-// Moteur de recherche plein texte — Recherche POH.
+// Moteur de recherche plein texte — Bibliothèque Aviation.
 // Règles (spécification) :
 //  - insensible à la casse et aux accents ;
 //  - MOT ENTIER pour tous les termes : « stall » ne trouve jamais « installed » ;

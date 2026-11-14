@@ -1,4 +1,4 @@
-# Build macOS — Recherche POH (Electron)
+# Build macOS — Bibliothèque Aviation (Electron)
 #
 # Dépôt : juliengoffauxdu60/Recherche-POH (privé). Chaque push sur main
 # produira deux DMG macOS en artefact : un pour Apple Silicon (arm64) et
@@ -47,7 +47,7 @@ jobs:
       - name: Publier les DMG (.dmg + .blockmap)
         uses: actions/upload-artifact@v4
         with:
-          name: recherche-poh-macos
+          name: bibliotheque-aviation-macos
           path: |
             dist/*.dmg
             dist/*.blockmap

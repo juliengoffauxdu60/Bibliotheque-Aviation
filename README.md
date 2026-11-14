@@ -1,4 +1,4 @@
-# Recherche POH — application desktop (Electron)
+# Bibliothèque Aviation — application desktop (Electron)
 
 Recherche plein texte dans les POH Cessna 172N, 172R, 150 et le SOP C150
 (Air Richelieu), avec lecteur PDF intégré. Application 100 % locale :

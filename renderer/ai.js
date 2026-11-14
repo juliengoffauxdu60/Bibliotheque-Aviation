@@ -1,4 +1,4 @@
-// Zone « Poser une question » — Recherche POH.
+// Zone « Poser une question » — Bibliothèque Aviation.
 // Branchée par le PATCH D'INTÉGRATION (index.html) : section #aiAskSection +
 // <script type="module" src="./ai.js"></script>.
 // Fonctionnement :

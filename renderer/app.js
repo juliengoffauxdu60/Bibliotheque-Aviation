@@ -1,4 +1,4 @@
-// Logique de l'application — Recherche POH.
+// Logique de l'application — Bibliothèque Aviation.
 // Charge les 4 PDF ENTIERS avec UNE seule instance pdf.js par document (pas de
 // découpage en morceaux) : un changement de page ou de section ne fait que
 // re-rendre le canevas à partir du document déjà chargé, jamais recharger.
@@ -13,11 +13,19 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = 'app://assets/pdfjs/pdf.worker.mjs';
 
 const $ = (id) => document.getElementById(id);
 const LARGE_WIDTH_PX = 640; // « Plus grand » ≈ 640 px de large (checklist, ligne 6).
+// Zoom : en % de l'échelle de base (mode « Plus grand » ou « Page entière »),
+// par pas de 25 points, de 50 % à 300 %. 100 % = taille de base du mode.
+const ZOOM_MIN = 50, ZOOM_MAX = 300, ZOOM_STEP = 25;
+function clampZoom(pct) {
+  const n = Number.isFinite(pct) ? Math.round(pct) : 100;
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, n));
+}
 
 const state = {
   docsMeta: null, synonyms: null, indexes: {}, // docId -> index JSON
   currentDoc: null, currentPage: 1,
   viewMode: localStorage.getItem('poh-view-mode') || 'large',
+  zoomPct: clampZoom(parseInt(localStorage.getItem('poh-zoom') || '100', 10)),
   results: [], currentResult: -1, lastQuery: '', lastScope: 'all', lastTotal: 0,
   pdfDocs: {},   // docId -> PDFDocumentProxy
   pdfPromises: {}, // docId -> promesse getDocument (évite les doubles chargements)
@@ -139,6 +147,10 @@ async function renderCurrentPage() {
     } else {
       scale = Math.min(LARGE_WIDTH_PX, availW) / viewport0.width;
     }
+    // Zoom : multiplie l'échelle de base du mode courant. Le centrage
+    // (synchrone + double rAF, plus bas) s'applique après chaque rendu,
+    // donc la page reste centrée à tous les niveaux de zoom.
+    scale *= state.zoomPct / 100;
     const viewport = page.getViewport({ scale });
     canvas.width = Math.floor(viewport.width * window.devicePixelRatio);
     canvas.height = Math.floor(viewport.height * window.devicePixelRatio);
@@ -190,6 +202,9 @@ function updateReaderChrome() {
   $('ocrBanner').hidden = !meta.ocr;
   $('prevPageBtn').disabled = state.currentPage <= 1;
   $('nextPageBtn').disabled = state.currentPage >= meta.totalPages;
+  $('zoomLabel').textContent = state.zoomPct + ' %';
+  $('zoomOutBtn').disabled = state.zoomPct <= ZOOM_MIN;
+  $('zoomInBtn').disabled = state.zoomPct >= ZOOM_MAX;
   $('fitBtn').classList.toggle('active', state.viewMode === 'fit');
   $('largeBtn').classList.toggle('active', state.viewMode === 'large');
   $('pdfScroll').classList.toggle('fit-mode', state.viewMode === 'fit');
@@ -378,6 +393,28 @@ function centeringInfo() {
   });
 }
 
+function zoomInfo() {
+  const scroll = $('pdfScroll');
+  const canvas = $('pdfCanvas');
+  const sRect = scroll.getBoundingClientRect();
+  const cRect = canvas.getBoundingClientRect();
+  // Le centre de la vue se mesure avec clientHeight (zone visible réelle),
+  // pas avec la hauteur de la boîte : quand la page zoomée est plus large
+  // que la vue, la barre de défilement horizontale réduit clientHeight
+  // (~15 px) alors que getBoundingClientRect garde la hauteur totale —
+  // mesurer avec la boîte fausserait le centrage de ~8 px.
+  const viewportCenterY = sRect.top + scroll.clientHeight / 2;
+  return JSON.stringify({
+    zoomPct: state.zoomPct,
+    mode: state.viewMode,
+    offsetPx: Math.round((cRect.top + cRect.height / 2) - viewportCenterY),
+    canvasCssWidth: Math.round(cRect.width),
+    label: $('zoomLabel').textContent,
+    zoomOutDisabled: $('zoomOutBtn').disabled,
+    zoomInDisabled: $('zoomInBtn').disabled,
+  });
+}
+
 function floatingNavInfo() {
   const nav = document.querySelector('.floating-nav');
   const panel = document.querySelector('.reader-panel');
@@ -427,6 +464,8 @@ function bindEvents() {
   });
   $('prevPageBtn').addEventListener('click', (e) => { openDocPage(state.currentDoc, state.currentPage - 1); e.currentTarget.blur(); });
   $('nextPageBtn').addEventListener('click', (e) => { openDocPage(state.currentDoc, state.currentPage + 1); e.currentTarget.blur(); });
+  $('zoomInBtn').addEventListener('click', (e) => { setZoom(state.zoomPct + ZOOM_STEP); e.currentTarget.blur(); });
+  $('zoomOutBtn').addEventListener('click', (e) => { setZoom(state.zoomPct - ZOOM_STEP); e.currentTarget.blur(); });
   $('fitBtn').addEventListener('click', (e) => { setViewMode('fit'); e.currentTarget.blur(); });
   $('largeBtn').addEventListener('click', (e) => { setViewMode('large'); e.currentTarget.blur(); });
   $('sectionsMenuBtn').addEventListener('click', (e) => {
@@ -459,10 +498,31 @@ function bindEvents() {
 }
 
 async function setViewMode(mode) {
-  state.viewMode = mode;
-  localStorage.setItem('poh-view-mode', mode);
+  if (mode !== state.viewMode) {
+    state.viewMode = mode;
+    localStorage.setItem('poh-view-mode', mode);
+    // Changer de mode repart de la taille de base : « Page entière » doit
+    // montrer la page entière, « Plus grand » ses 640 px de base.
+    state.zoomPct = 100;
+    localStorage.setItem('poh-zoom', '100');
+  }
   if (state.currentDoc) await renderCurrentPage();
   else updateReaderChromeSafe();
+}
+
+// Zoom : le facteur vit dans l'état, donc il survit à tout changement de
+// page, de section et de document (chaque rendu l'applique) ; il est aussi
+// mémorisé d'une session à l'autre, comme le mode d'affichage.
+async function setZoom(pct) {
+  state.zoomPct = clampZoom(pct);
+  localStorage.setItem('poh-zoom', String(state.zoomPct));
+  if (state.currentDoc) await renderCurrentPage();
+  else {
+    $('zoomLabel').textContent = state.zoomPct + ' %';
+    $('zoomOutBtn').disabled = state.zoomPct <= ZOOM_MIN;
+    $('zoomInBtn').disabled = state.zoomPct >= ZOOM_MAX;
+  }
+  return state.zoomPct + ' %';
 }
 
 function updateReaderChromeSafe() {
@@ -503,6 +563,8 @@ window.__poh = {
     return { ...res, sections: numberedSections(doc).length, ocrWarningVisible: !$('ocrBanner').hidden };
   },
   setMode: (m) => setViewMode(m).then(() => m),
+  setZoom: (pct) => setZoom(pct),
+  zoomInfo,
   nextPage: () => openDocPage(state.currentDoc, state.currentPage + 1),
   prevPage: () => openDocPage(state.currentDoc, state.currentPage - 1),
   nextResult: async () => {

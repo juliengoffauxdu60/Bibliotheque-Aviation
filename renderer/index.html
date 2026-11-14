@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Recherche POH — Air Richelieu</title>
+<title>Bibliothèque Aviation — Air Richelieu</title>
 <link rel="stylesheet" href="./styles.css">
 <link rel="stylesheet" href="./ai.css">
 </head>
 <body>
 <header class="app-header">
   <div class="app-title">
-    <h1>Recherche POH</h1>
+    <h1>Bibliothèque Aviation</h1>
     <p class="subtitle">POH Cessna 172N · 172R · 150 — SOP C150 · Air Richelieu</p>
   </div>
   <form id="searchForm" class="search-bar" role="search">
@@ -81,6 +81,10 @@
         <button type="button" id="prevPageBtn">‹ Page précédente</button>
         <span id="pageCounter" class="page-counter">Page — sur —</span>
         <button type="button" id="nextPageBtn">Page suivante ›</button>
+        <span class="zoom-sep" aria-hidden="true"></span>
+        <button type="button" id="zoomOutBtn" aria-label="Zoom arrière">−</button>
+        <span id="zoomLabel" class="zoom-label" aria-live="polite">100 %</span>
+        <button type="button" id="zoomInBtn" aria-label="Zoom avant">+</button>
       </nav>
     </section>
   </div>
