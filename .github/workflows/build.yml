@@ -12,8 +12,10 @@
 # n'a pas suffi : les tâches d'un même job publient en parallèle. Donc
 # --publish never partout, et c'est le job `release` qui crée la Release
 # UNE fois, avec `gh release create`, à partir des artefacts des deux
-# builds. Les runs sur main ne font que construire (le job `release`
-# ne tourne que sur un tag v*).
+# builds. Le job `release` fait un checkout : `gh` a besoin d'un dépôt
+# git local pour déterminer le dépôt (sans lui, « fatal: not a git
+# repository », vécu le 14 nov.). Les runs sur main ne font que construire
+# (le job `release` ne tourne que sur un tag v*).
 #
 # POURQUOI LA SIGNATURE AD-HOC (même jour) : sans signature, macOS sur
 # Apple Silicon dit que l'appli « est endommagée » et n'offre AUCUN
@@ -111,6 +113,9 @@ jobs:
     needs: [build-windows, build-macos]
     if: startsWith(github.ref, 'refs/tags/')
     steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
       - name: Récupérer les installateurs Windows
         uses: actions/download-artifact@v4
         with:
