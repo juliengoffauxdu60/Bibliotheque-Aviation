@@ -1,7 +1,10 @@
 # Build macOS — Recherche POH (Electron)
 #
 # Dépôt : juliengoffauxdu60/Recherche-POH (privé). Chaque push sur main
-# produira le DMG macOS universel (Apple Silicon + Intel) en artefact.
+# produira deux DMG macOS en artefact : un pour Apple Silicon (arm64) et
+# un pour Intel (x64). Pas de DMG universel : le fusionneur d'electron-
+# builder refuse le module natif canvas (@napi-rs/canvas-darwin-arm64),
+# identique dans les deux builds et non couvert par une règle x64ArchFiles.
 # Le DMG n'est ni signé ni notarié (pas de compte Apple Developer) : à la
 # première ouverture sur un Mac, faire clic droit puis Ouvrir.
 name: Build macOS
@@ -31,10 +34,10 @@ jobs:
       - name: Tests du moteur de recherche
         run: npm test
 
-      - name: Construire le DMG macOS
+      - name: Construire les DMG macOS
         run: npm run dist:mac
 
-      - name: Publier le DMG (.dmg + .blockmap)
+      - name: Publier les DMG (.dmg + .blockmap)
         uses: actions/upload-artifact@v4
         with:
           name: recherche-poh-macos
