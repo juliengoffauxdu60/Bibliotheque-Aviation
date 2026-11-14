@@ -1,29 +1,38 @@
 # Build — Bibliothèque Aviation (Electron)
 #
-# Dépôt : juliengoffauxdu60/Recherche-POH (privé). Un seul workflow, deux
-# jobs en série : Windows construit et publie d'abord, macOS ensuite.
+# Dépôt : juliengoffauxdu60/Recherche-POH (privé). Trois jobs en série :
+# Windows construit, macOS construit, puis UN SEUL job publie la Release.
 #
-# POURQUOI UN SEUL WORKFLOW (leçon des v1.0.0 / v1.1.0, 14 nov. 2026) :
-# avec deux workflows parallèles, les deux jobs publiaient en même temps
-# vers la même Release et electron-builder créait la Release deux fois
-# (deux Releases v1.0.0, actifs partagés entre les deux ; v1.1.0 : le job
-# macOS a échoué en 422 « Release already_exists »). Le `needs` ci-dessous
-# sérialise la publication : un seul créateur, l'autre ajoute ses fichiers.
+# POURQUOI ELECTRON-BUILDER NE PUBLIE JAMAIS (leçon des v1.0.0 / v1.1.0,
+# 14 nov. 2026) : son publieur GitHub crée la Release en parallèle dans
+# chaque tâche et se marche dessus — v1.0.0 a eu DEUX Releases (actifs
+# partagés, un blockmap dans la mauvaise), v1.1.0 aussi (le DMG arm64 a
+# écrasé le DMG x64 sous le même nom, le DMG x64 a disparu), et un job
+# macOS a échoué en 422 « Release already_exists ». Même le `needs`
+# n'a pas suffi : les tâches d'un même job publient en parallèle. Donc
+# --publish never partout, et c'est le job `release` qui crée la Release
+# UNE fois, avec `gh release create`, à partir des artefacts des deux
+# builds. Les runs sur main ne font que construire (le job `release`
+# ne tourne que sur un tag v*).
 #
-# POURQUOI LES SCRIPTS :ci : --publish onTag publie dès que le commit
-# courant porte un tag, même pour un run déclenché par un push sur main
-# (c'est ce qui a fait publier les runs main de la v1.1.0). Les runs main
-# utilisent donc les scripts :ci (--publish never) et ne touchent jamais
-# aux Releases ; seuls les runs déclenchés par un tag v* publient.
+# POURQUOI LA SIGNATURE AD-HOC (même jour) : sans signature, macOS sur
+# Apple Silicon dit que l'appli « est endommagée » et n'offre AUCUN
+# bouton dans les Réglages — il faut Terminal, inacceptable pour les
+# gens de la classe. `identity: "-"` signe ad-hoc (gratuit, sans compte
+# Apple Developer) et `hardenedRuntime: false` évite le rejet des
+# frameworks Electron pré-signés par la validation de bibliothèques.
+# Résultat : téléchargée, l'appli s'ouvre par clic droit puis Ouvrir ;
+# copiée depuis une clé USB (sans quarantaine), elle s'ouvre directement.
+# La signature parfaite (Developer ID + notarisation, zéro message)
+# demanderait un compte Apple Developer payant — pas en place.
 #
 # Chaque push sur main produit les installateurs en artefacts. Chaque tag
 # v* publie en plus une Release GitHub avec l'exe et les DMG en
-# téléchargement direct. Le DMG n'est ni signé ni notarié (pas de compte
-# Apple Developer) : à la première ouverture sur un Mac, faire clic droit
-# puis Ouvrir. Pas de DMG universel : le fusionneur d'electron-builder
-# refuse le module natif canvas (@napi-rs/canvas-darwin-arm64), identique
-# dans les deux builds et non couvert par une règle x64ArchFiles — donc
-# deux DMG séparés, arm64 (Apple Silicon) et x64 (Intel).
+# téléchargement direct. Pas de DMG universel : le fusionneur
+# d'electron-builder refuse le module natif canvas
+# (@napi-rs/canvas-darwin-arm64), identique dans les deux builds et non
+# couvert par une règle x64ArchFiles — donc deux DMG séparés, arm64
+# (Apple Silicon) et x64 (Intel).
 name: Build
 
 permissions:
@@ -55,10 +64,7 @@ jobs:
         run: npm test
 
       - name: Construire l'installateur Windows
-        # Tag v* -> dist (publie la Release) ; sinon dist:ci (jamais).
-        run: npm run ${{ startsWith(github.ref, 'refs/tags/') && 'dist' || 'dist:ci' }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run dist
 
       - name: Publier l'installateur (.exe + .blockmap)
         uses: actions/upload-artifact@v4
@@ -89,11 +95,7 @@ jobs:
         run: npm test
 
       - name: Construire les DMG macOS
-        # Tag v* -> dist:mac (ajoute les DMG à la Release créée par
-        # Windows) ; sinon dist:mac:ci (jamais).
-        run: npm run ${{ startsWith(github.ref, 'refs/tags/') && 'dist:mac' || 'dist:mac:ci' }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run dist:mac
 
       - name: Publier les DMG (.dmg + .blockmap)
         uses: actions/upload-artifact@v4
@@ -103,3 +105,30 @@ jobs:
             dist/*.dmg
             dist/*.blockmap
           if-no-files-found: error
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [build-windows, build-macos]
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Récupérer les installateurs Windows
+        uses: actions/download-artifact@v4
+        with:
+          name: bibliotheque-aviation-windows
+          path: dist-win
+
+      - name: Récupérer les DMG macOS
+        uses: actions/download-artifact@v4
+        with:
+          name: bibliotheque-aviation-macos
+          path: dist-mac
+
+      - name: Créer la Release avec tous les installateurs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --notes "Bibliothèque Aviation — recherche plein texte dans les documents d'aviation (POH, AIM, RAC)." \
+            dist-win/*.exe dist-win/*.blockmap \
+            dist-mac/*.dmg dist-mac/*.blockmap

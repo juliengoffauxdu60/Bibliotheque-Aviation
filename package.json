@@ -21,6 +21,8 @@
       "target": "AppImage"
     },
     "mac": {
+      "identity": "-",
+      "hardenedRuntime": false,
       "target": "dmg"
     },
     "productName": "Bibliothèque Aviation",
@@ -52,11 +54,9 @@
     "url": "https://github.com/juliengoffauxdu60/Recherche-POH.git"
   },
   "scripts": {
-    "build": "electron-builder --publish onTag",
-    "dist": "electron-builder --win --publish onTag",
-    "dist:ci": "electron-builder --win --publish never",
-    "dist:mac": "electron-builder --mac --x64 --arm64 --publish onTag",
-    "dist:mac:ci": "electron-builder --mac --x64 --arm64 --publish never",
+    "build": "electron-builder --publish never",
+    "dist": "electron-builder --win --publish never",
+    "dist:mac": "electron-builder --mac --x64 --arm64 --publish never",
     "selftest": "node scripts/selftest.js",
     "start": "electron .",
     "test": "node test/search.test.mjs"
