@@ -42,8 +42,8 @@
   "name": "recherche-poh",
   "private": true,
   "scripts": {
-    "build": "electron-builder",
-    "dist": "electron-builder --win",
+    "build": "electron-builder --publish never",
+    "dist": "electron-builder --win --publish never",
     "selftest": "node scripts/selftest.js",
     "start": "electron .",
     "test": "node test/search.test.mjs"
