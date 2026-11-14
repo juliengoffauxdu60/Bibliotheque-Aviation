@@ -1,4 +1,4 @@
-// import.js — « Ajouter un POH » + OCR intégré (rendu).
+// import.js — « Ajouter un document » + OCR intégré (rendu).
 //
 // CHARGÉ PAR renderer/index.html (patch d'intégration : 1 ligne).
 // Ce module ne touche à AUCUNE fonction de app.js : il crée son propre
@@ -59,7 +59,12 @@ function injectStyles() {
 .doc-card { position: relative; }
 .doc-card .doc-delete { position: absolute; top: 4px; right: 6px; width: 22px; height: 22px; line-height: 20px; text-align: center; border-radius: 50%; border: 1px solid #d5dde4; background: #fff; color: #a33; font-size: 13px; font-weight: 700; cursor: pointer; padding: 0; }
 .doc-card .doc-delete:hover { background: #fdecec; border-color: #a33; }
-.doc-card .doc-imported { font-size: 11px; color: #1e6b34; }`;
+.doc-card .doc-imported { font-size: 11px; color: #1e6b34; }
+#hiddenBox { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+#hiddenBox .hidden-title { font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 6px; }
+#hiddenBox .hidden-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; padding: 4px 0; }
+#hiddenBox .hidden-row button { padding: 4px 10px; border-radius: 8px; border: 1px solid var(--line); background: #fff; font-weight: 700; cursor: pointer; }
+#hiddenBox .hidden-row button:hover { background: var(--blue-soft); }`;
   document.head.appendChild(st);
 }
 
@@ -72,8 +77,12 @@ function buildImportBox() {
   const box = document.createElement('div');
   box.id = 'importBox';
   box.innerHTML = `
-    <button type="button" id="importAddBtn">＋ Ajouter un POH</button>
+    <button type="button" id="importAddBtn">＋ Ajouter un document</button>
     <div id="importStatus" aria-live="polite"></div>
+    <div id="hiddenBox" hidden>
+      <div class="hidden-title">Documents masqués</div>
+      <div id="hiddenList"></div>
+    </div>
     <div id="importWarning" hidden>
       <div class="warn-title">⚠ Ce PDF semble scanné (aucun texte).</div>
       <div id="importWarningText"></div>
@@ -124,10 +133,14 @@ function showProgress(done, total, label) {
 function hideProgress() { const w = $('importProgress'); if (w) w.hidden = true; }
 
 // ---------------------------------------------------------------------------
-// Documents importés : options de portée + boutons supprimer
-// ---------------------------------------------------------------------------
+// Documents : options de portée + boutons ✕ sur TOUTES les cartes.
+// Importé : ✕ = supprimer le fichier (définitif). Fourni : ✕ = masquer
+// (le fichier reste dans l'application, restorable depuis « Documents
+// masqués » ci-dessous) — un élève qui n'a pas besoin du 172R ou du 150
+// peut l'enlever sans perdre le document.
 function decorateImportedDocs() {
   const scope = $('scopeSelect');
+  const importedIds = new Set(state.imported.map((e) => e.doc_id));
   for (const entry of state.imported) {
     const docId = entry.doc_id;
     if (scope && !scope.querySelector(`option[value="${docId}"]`)) {
@@ -140,15 +153,85 @@ function decorateImportedDocs() {
     if (card && !card.querySelector('.doc-delete')) {
       const sub = card.querySelector('.doc-sub');
       if (sub) sub.insertAdjacentHTML('afterend', ' <span class="doc-imported">· importé</span>');
-      const del = document.createElement('button');
-      del.type = 'button';
-      del.className = 'doc-delete';
-      del.title = 'Supprimer ce document importé';
-      del.setAttribute('aria-label', `Supprimer ${entry.title}`);
-      del.textContent = '✕';
-      del.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault(); onDeleteClick(entry); });
-      card.appendChild(del);
     }
+  }
+  for (const card of document.querySelectorAll('.doc-card')) {
+    if (card.querySelector('.doc-delete')) continue;
+    const docId = card.dataset.doc;
+    const title = (card.querySelector('.doc-name') || {}).textContent || docId;
+    const isImported = importedIds.has(docId);
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'doc-delete';
+    del.title = isImported ? 'Supprimer ce document importé' : 'Masquer ce document';
+    del.setAttribute('aria-label', `${isImported ? 'Supprimer' : 'Masquer'} ${title}`);
+    del.textContent = '✕';
+    del.addEventListener('click', (e) => {
+      e.stopPropagation(); e.preventDefault();
+      if (isImported) {
+        const entry = state.imported.find((x) => x.doc_id === docId);
+        onDeleteClick(entry || { doc_id: docId, title });
+      } else {
+        onHideClick(docId, title);
+      }
+    });
+    card.appendChild(del);
+  }
+}
+
+async function renderHiddenDocs() {
+  const a = api();
+  const box = $('hiddenBox');
+  const list = $('hiddenList');
+  if (!a || !a.hiddenList || !box || !list) return;
+  let hidden = [];
+  try { hidden = (await a.hiddenList()) || []; } catch { hidden = []; }
+  list.innerHTML = '';
+  box.hidden = hidden.length === 0;
+  for (const h of hidden) {
+    const row = document.createElement('div');
+    row.className = 'hidden-row';
+    const name = document.createElement('span');
+    name.textContent = h.title;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = 'Restaurer';
+    btn.addEventListener('click', async (e) => {
+      e.currentTarget.blur();
+      try {
+        const res = await a.unhideDoc(h.id);
+        if (!res || !res.ok) { setStatus('Restauration impossible : ' + (res && res.error ? res.error : 'erreur inconnue'), 'error'); return; }
+        setStatus(`« ${h.title} » restauré. Rechargement…`, 'ok');
+        scheduleReload(800);
+      } catch (err) { setStatus('Restauration impossible : ' + err.message, 'error'); }
+    });
+    row.appendChild(name);
+    row.appendChild(btn);
+    list.appendChild(row);
+  }
+}
+
+// Masquer un document fourni (avec confirmation) : il disparaît des
+// cartes et de la recherche, mais reste dans l'application.
+async function onHideClick(docId, title) {
+  const a = api();
+  if (!a) return;
+  const ok = window.confirm(
+    `Masquer « ${title} » ?\n\nLe document ne sera plus affiché ni cherché, mais il reste dans l’application : ` +
+    'vous pourrez le restaurer depuis « Documents masqués » ci-dessous.',
+  );
+  if (!ok) return;
+  setStatus('Masquage en cours…', '');
+  try {
+    const res = await a.hideDoc(docId);
+    if (!res || !res.ok) {
+      setStatus('Masquage impossible : ' + (res && res.error ? res.error : 'erreur inconnue'), 'error');
+      return;
+    }
+    setStatus(`« ${title} » masqué. Rechargement…`, 'ok');
+    scheduleReload(800);
+  } catch (e) {
+    setStatus('Masquage impossible : ' + e.message, 'error');
   }
 }
 
@@ -159,9 +242,10 @@ async function refreshImported() {
     state.imported = (await a.list()) || [];
   } catch (e) {
     state.imported = [];
-    setStatus('Impossible de lister les POH importés : ' + e.message, 'error');
+    setStatus('Impossible de lister les documents importés : ' + e.message, 'error');
   }
   decorateImportedDocs();
+  await renderHiddenDocs();
   return state.imported;
 }
 
@@ -304,7 +388,7 @@ async function onDeleteClick(entry) {
   if (!a) return;
   const ok = window.confirm(
     `Supprimer « ${entry.title} » ?\n\nLe PDF importé et son index seront supprimés du dossier de l’application. ` +
-    'Les 4 POH fournis ne sont jamais concernés.',
+    'Les documents fournis ne sont jamais concernés.',
   );
   if (!ok) return;
   setStatus('Suppression en cours…', '');
@@ -353,4 +437,10 @@ window.__pohImport = {
   startOcr: (docId) => startOcr(docId),
   deleteDoc: (docId) => onDeleteClick(
     state.imported.find((e) => e.doc_id === docId) || { doc_id: docId, title: docId }),
+  hideDoc: (docId) => {
+    const card = document.querySelector(`.doc-card[data-doc="${docId}"]`);
+    const title = (card && card.querySelector('.doc-name') || {}).textContent || docId;
+    return onHideClick(docId, title);
+  },
+  hiddenList: () => api() && api().hiddenList ? api().hiddenList() : Promise.resolve([]),
 };

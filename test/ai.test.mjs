@@ -117,6 +117,34 @@ const fetchDown = fakeFetch(async () => { const e = new Error('fetch failed'); e
 await checkThrows('callProvider local injoignable -> message clair',
   () => callProvider({ provider: 'local', model: 'llama3.1', endpoint: PROVIDERS.local.defaultEndpoint, key: '' }, promptTest, fetchDown),
   'Impossible de joindre l’IA locale. Vérifiez que le logiciel d’IA locale (Ollama ou LM Studio) est bien lancé, et l’adresse dans « Réglages IA ».');
+
+// 6b. Erreur 503 de Gemini (14 nov. : Julien obtient « code 503 » sur le
+// test et sur sa question) : le message du fournisseur est lu et traduit,
+// et l'appel est réessayé automatiquement avant d'abandonner.
+check('erreur 503 surchargé -> message clair',
+  mapHttpError(503, '', 'The model is overloaded. Please try again later.').userMessage.includes('surchargé'), true);
+check('erreur 400 clé invalide -> message clair',
+  mapHttpError(400, '', 'API key not valid. Please pass a valid API key.').userMessage.includes('clé API'), true);
+check('erreur 404 modèle introuvable -> message clair',
+  mapHttpError(404, '', 'models/gemini-3.8-flash is not found for API version v1beta').userMessage.includes('modèle'), true);
+check('erreur 503 sans détail -> code conservé',
+  mapHttpError(503).userMessage.includes('code 503'), true);
+let tries503 = 0;
+const fetch503ThenOk = fakeFetch(async () => {
+  tries503++;
+  if (tries503 < 3) {
+    return { ok: false, status: 503, json: async () => ({ error: { code: 503, message: 'The model is overloaded. Please try again later.', status: 'UNAVAILABLE' } }) };
+  }
+  return { ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: 'OK' }] } }] }) };
+});
+check('callProvider gemini 503 puis OK : réessaie et réussit',
+  await callProvider({ provider: 'gemini', model: 'gemini-3.8-flash', endpoint: PROVIDERS.gemini.defaultEndpoint, key: 'CLE-FAUSSE' }, promptTest, fetch503ThenOk, { retryDelaysMs: [0, 0] }),
+  'OK');
+check('callProvider gemini 503 puis OK : 3 appels', tries503, 3);
+const fetch503Always = fakeFetch(async () => ({ ok: false, status: 503, json: async () => ({ error: { code: 503, message: 'The model is overloaded. Please try again later.', status: 'UNAVAILABLE' } }) }));
+await checkThrows('callProvider gemini 503 persistant -> « surchargé », pas un code sec',
+  () => callProvider({ provider: 'gemini', model: 'gemini-3.8-flash', endpoint: PROVIDERS.gemini.defaultEndpoint, key: 'CLE-FAUSSE' }, promptTest, fetch503Always, { retryDelaysMs: [0, 0] }),
+  'Le modèle est surchargé en ce moment : le fournisseur demande de réessayer dans un moment. Si ça persiste, essayez un autre modèle (par exemple « gemini-3.6-flash ») dans « Réglages IA ».');
 // La clé n'est jamais envoyée ailleurs que vers le fournisseur choisi :
 // le fetch factice enregistre l'URL appelée.
 let calledUrl = '';

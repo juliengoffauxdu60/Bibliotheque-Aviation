@@ -15,6 +15,9 @@
 //   poh-import:ocr-finish   -> { ok, doc_id, title, totalPages, sections }
 //   poh-import:ocr-cancel   -> { ok: true }
 //   poh-import:delete       -> { ok: true }
+//   poh-import:hidden-list  -> [{ id, title }] (documents fournis masqués)
+//   poh-import:hide-doc     -> { ok: true } (masque un document fourni)
+//   poh-import:unhide-doc   -> { ok: true } (restaure un document fourni)
 // En cas d'erreur un handler retourne { ok: false, error } (jamais d'exception
 // non attrapée : le rendu affiche le message).
 import { app, dialog, ipcMain } from 'electron';
@@ -62,11 +65,99 @@ function listImported() {
     if (!isSafeDocId(name)) continue;
     const metaPath = path.join(base, name, 'meta.json');
     if (!fs.existsSync(metaPath)) continue;
-    try { out.push(JSON.parse(fs.readFileSync(metaPath, 'utf8'))); }
-    catch (e) { console.warn(`[import] meta.json illisible pour ${name} : ${e.message}`); }
+    try {
+      const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+      out.push(refreshImportedDoc(name, meta));
+    } catch (e) { console.warn(`[import] meta.json illisible pour ${name} : ${e.message}`); }
   }
   out.sort((a, b) => String(a.added_at || '').localeCompare(String(b.added_at || '')));
   return out;
+}
+
+// Réparation des imports déjà faits : la détection des sections a changé
+// (les sommaires ne comptent plus comme début de section — le PA-44 de
+// Julien démarrait ses 10 sections p. 25). À chaque lecture du registre,
+// on recalcule les sections depuis le texte déjà stocké dans index.json
+// (aucun OCR à refaire) et on réécrit index.json + meta.json quand ça
+// diffère. Le titre perd aussi son « .pdf » éventuel (« PA44.PDF »).
+// Ne casse jamais la liste : toute erreur rend la méta telle quelle.
+function refreshImportedDoc(docId, meta) {
+  try {
+    const indexPath = path.join(docDir(docId), 'index.json');
+    if (!fs.existsSync(indexPath)) return meta;
+    const index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+    if (!index || !Array.isArray(index.pages) || index.pages.length === 0) return meta;
+    const { sections, pageSection } = detectSections(index.pages);
+    const sameSections = JSON.stringify(meta.doc && meta.doc.sections) === JSON.stringify(sections);
+    const samePages = index.pages.every((p) => (pageSection.get(p.pdf_page) || 'front') === p.section);
+    const cleanTitle = String(meta.title || '').replace(/\.pdf$/i, '').trim();
+    const sameTitle = cleanTitle === meta.title && meta.doc && cleanTitle === meta.doc.title;
+    if (sameSections && samePages && sameTitle) return meta;
+    for (const p of index.pages) p.section = pageSection.get(p.pdf_page) || 'front';
+    fs.writeFileSync(indexPath, JSON.stringify(index), 'utf8');
+    meta.title = cleanTitle;
+    if (meta.doc) {
+      meta.doc.title = cleanTitle;
+      meta.doc.sections = sections;
+    }
+    writeMeta(docId, meta);
+    return meta;
+  } catch (e) {
+    console.warn(`[import] sections non rafraîchies pour ${docId} : ${e.message}`);
+    return meta;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Documents fournis masqués (l'utilisateur peut retirer un document de
+// base — 172N, 172R, 150, SOP — comme un importé ; on ne supprime jamais
+// les fichiers fournis, on les masque seulement, et on peut les restaurer).
+// Stockage : userData/hidden-docs.json — simple tableau d'identifiants.
+// ---------------------------------------------------------------------------
+function hiddenDocsPath() {
+  return path.join(app.getPath('userData'), 'hidden-docs.json');
+}
+
+function bundledDocs() {
+  try {
+    const docs = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'docs.json'), 'utf8'));
+    return Array.isArray(docs.docs) ? docs.docs : [];
+  } catch {
+    return [];
+  }
+}
+
+function readHiddenDocs() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(hiddenDocsPath(), 'utf8'));
+    if (!Array.isArray(raw)) return [];
+    const known = new Set(bundledDocs().map((d) => d.id));
+    return raw.filter((id) => typeof id === 'string' && known.has(id));
+  } catch { return []; }
+}
+
+function writeHiddenDocs(ids) {
+  fs.mkdirSync(path.dirname(hiddenDocsPath()), { recursive: true });
+  fs.writeFileSync(hiddenDocsPath(), JSON.stringify([...new Set(ids)], null, 2), 'utf8');
+}
+
+function listHiddenDocs() {
+  const hidden = new Set(readHiddenDocs());
+  return bundledDocs().filter((d) => hidden.has(d.id)).map((d) => ({ id: d.id, title: d.title }));
+}
+
+function hideDoc({ docId }) {
+  const known = new Set(bundledDocs().map((d) => d.id));
+  if (!known.has(docId)) return { ok: false, error: 'Document fourni introuvable : ' + String(docId) };
+  const ids = readHiddenDocs();
+  if (!ids.includes(docId)) { ids.push(docId); writeHiddenDocs(ids); }
+  return { ok: true, doc_id: docId };
+}
+
+function unhideDoc({ docId }) {
+  const ids = readHiddenDocs().filter((id) => id !== docId);
+  writeHiddenDocs(ids);
+  return { ok: true, doc_id: docId };
 }
 
 // Dossiers candidats pour les données OCR (fra+eng). En dev : assets/.
@@ -280,7 +371,7 @@ export function registerImportHandlers() {
   ipcMain.handle('poh-import:list', () => listImported());
   ipcMain.handle('poh-import:choose-file', async () => {
     const res = await dialog.showOpenDialog({
-      title: 'Choisir un POH (PDF)',
+      title: 'Choisir un document (PDF)',
       properties: ['openFile'],
       filters: [{ name: 'PDF', extensions: ['pdf'] }],
     });
@@ -292,4 +383,7 @@ export function registerImportHandlers() {
   ipcMain.handle('poh-import:ocr-finish', (_e, args) => ocrFinish(args || {}));
   ipcMain.handle('poh-import:ocr-cancel', (_e, args) => ocrCancel(args || {}));
   ipcMain.handle('poh-import:delete', (_e, args) => deleteDoc(args || {}));
+  ipcMain.handle('poh-import:hidden-list', () => listHiddenDocs());
+  ipcMain.handle('poh-import:hide-doc', (_e, args) => hideDoc(args || {}));
+  ipcMain.handle('poh-import:unhide-doc', (_e, args) => unhideDoc(args || {}));
 }

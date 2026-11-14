@@ -38,6 +38,8 @@ check('makeDocId préfixe', id1.startsWith('imp-c172n-test-'), true);
 check('makeDocId collision -> suffixe', makeDocId('a.pdf', new Set([`imp-a-${Date.now().toString(36)}`])).startsWith('imp-a-'), true);
 check('displayTitle majuscules', displayTitle('Cessna 172 POH', 'x.pdf'), 'CESSNA 172 POH');
 check('displayTitle sans métadonnées', displayTitle(null, 'Mon Poh.pdf'), 'MON POH');
+check('displayTitle : extension .pdf retirée du titre intégré', displayTitle('PA44.PDF', 'POH PA44.pdf'), 'PA44');
+check('displayTitle : extension .pdf minuscule retirée', displayTitle('Manuel.pdf', 'x.pdf'), 'MANUEL');
 check('shortLabel', shortLabel('Test-172N-3p.pdf'), 'TEST172N3P');
 check('seuil scanné', SCANNED_MEDIAN_CHARS, 20);
 
@@ -82,6 +84,27 @@ const pagesToc = [
 ];
 check('TOC : pas de faux positif, section 1 en p. 7',
   detectSections(pagesToc).sections.map((s) => [s.key, s.startPage]), [['front', 1], ['1', 7]]);
+
+// Le PA-44 importé par Julien (14 nov.) : son sommaire (p. 25) et ses
+// sommaires par section (p. 27, 41, 53…) listent « SECTION N TITRE »
+// SANS points de suite — l'ancienne détection faisait démarrer les 10
+// sections p. 25. Index réel du PA-44 (278 pages, OCR).
+const pa44 = JSON.parse(fs.readFileSync(path.join(root, 'fixtures', 'pa44-index.json'), 'utf8'));
+const detPa44 = detectSections(pa44.pages);
+check('PA-44 : 10 sections + début', detPa44.sections.map((s) => s.key),
+  ['front', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']);
+check('PA-44 : pages de début (hors sommaires)', detPa44.sections.map((s) => s.startPage),
+  [1, 29, 43, 55, 83, 115, 151, 172, 212, 232, 276]);
+check('PA-44 : libellés depuis le sommaire', detPa44.sections.map((s) => s.label),
+  ['Début du document', 'Section 1 — General', 'Section 2 — Limitations',
+   'Section 3 — Emergency Procedures', 'Section 4 — Normal Procedures',
+   'Section 5 — Performance', 'Section 6 — Weight And Balance',
+   'Section 7 — Description And Operation Of',
+   'Section 8 — Airplane Handling, Servicing',
+   'Section 9 — Supplements', 'Section 10 — Safety Tips']);
+check('PA-44 : p. 25 -> front, p. 29 -> section 1, p. 151 -> section 6',
+  [detPa44.pageSection.get(25), detPa44.pageSection.get(29), detPa44.pageSection.get(151)],
+  ['front', '1', '6']);
 
 // 4. Scanné / non scanné.
 check('isScanned vide', isScanned([{ text: '' }, { text: 'ab' }]), { scanned: true, medianChars: 1, charsPerPage: [0, 2] });

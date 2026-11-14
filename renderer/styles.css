@@ -38,8 +38,13 @@ main { padding: 14px 22px 8px; }
 .grid { display: grid; grid-template-columns: 440px minmax(0, 1fr); gap: 16px; height: calc(100vh - 215px); min-height: 560px; }
 .grid > * { min-width: 0; }
 
-/* Colonne de gauche : en-têtes fixes, liste défilante */
-.left-col { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+/* Colonne de gauche : en-têtes fixes, liste défilante.
+   La colonne défile ELLE-MÊME dans la grille (hauteur fixe) quand les
+   cartes + puces de sections sont trop hautes (5e document ajouté, puces
+   sur 4 lignes) : sinon son contenu déborde sous la grille et se peint
+   par-dessus la section « Outils » (chevauchement vu le 14 nov. après
+   une recherche par mots-clés). */
+.left-col { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; }
 .left-col h2 { margin: 0 0 6px; font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 .doc-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .doc-card {

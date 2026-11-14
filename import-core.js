@@ -53,10 +53,12 @@ export function makeDocId(fileName, existingIds = new Set()) {
 
 // Titre affiché : en MAJUSCULES comme les onglets des documents fournis
 // (172N, 150, SOP). Titre PDF si présent, sinon nom du fichier sans extension.
+// L'extension « .pdf » est retirée du titre : elle vient souvent du titre
+// intégré du PDF (« PA44.PDF ») et n'apporte rien à l'affichage.
 export function displayTitle(pdfTitle, fileName) {
   const raw = (pdfTitle && String(pdfTitle).trim()) ||
     path.basename(fileName, path.extname(fileName));
-  return raw.toUpperCase();
+  return raw.replace(/\.pdf$/i, '').trim().toUpperCase();
 }
 
 // Abréviation courte (recherche, sélecteur de portée) : lettres/chiffres du
@@ -204,8 +206,26 @@ function titleAfter(lines, idx, restOfLine) {
   return '';
 }
 
+// Une page de table des matières n'est JAMAIS le début d'une section :
+// le PA-44 (importé par Julien, 14 nov.) liste « SECTION 1 GENERAL …
+// SECTION 10 SAFETY TIPS » sur sa page de sommaire (p. 25) puis un
+// sommaire par section (p. 27, 41, 53…) — sans points de suite, donc
+// le garde-fou « ... » ne les écartait pas, et les 10 sections
+// démarraient toutes p. 25. On écarte les pages dont le titre est une
+// table des matières (dans les 3 premières lignes non vides — un vrai
+// début de section peut mentionner « TABLE OF CONTENTS » plus bas,
+// cf. le test C150N p. 7). Repli : si une section n'apparaît QUE sur
+// des pages de sommaire, on garde sa première occurrence (mieux que rien).
+const TOC_TITLE_RE = /TABLE OF CONTENTS|TABLE DES MATIÈRES/i;
+
+function isTocPage(page) {
+  const firstLines = (page.text || '').split('\n').filter((l) => l.trim()).slice(0, 3);
+  return firstLines.some((l) => TOC_TITLE_RE.test(l));
+}
+
 export function detectSections(pages) {
-  const found = new Map(); // numéro -> { startPage, title }
+  const tocPages = new Set(pages.filter(isTocPage).map((p) => p.pdf_page));
+  const cands = new Map(); // numéro -> [{ startPage, title }] (ordre des pages)
   let kind = null;
   for (const page of pages) {
     const lines = (page.text || '').split('\n');
@@ -225,9 +245,8 @@ export function detectSections(pages) {
       const thisKind = mSec ? 'sections' : 'chapters';
       if (kind && kind !== thisKind) continue; // un seul type par document
       if (!kind) kind = thisKind;
-      if (found.has(num)) continue; // première occurrence = début (les
-      // en-têtes courants répètent « SECTION N » sur chaque page).
-      found.set(num, { startPage: page.pdf_page, title: titleAfter(lines, i, rest) });
+      if (!cands.has(num)) cands.set(num, []);
+      cands.get(num).push({ startPage: page.pdf_page, title: titleAfter(lines, i, rest) });
     }
   }
   const sections = [{ key: 'front', label: 'Début du document', startPage: 1 }];
@@ -235,8 +254,15 @@ export function detectSections(pages) {
     sections.push({ key: '1', label: 'Section unique — document entier', startPage: 1 });
     return { kind: 'none', sections, pageSection: new Map(pages.map((p) => [p.pdf_page, '1'])) };
   }
-  const ordered = [...found.entries()]
-    .map(([num, v]) => ({ num, ...v }))
+  const ordered = [...cands.entries()]
+    .map(([num, list]) => {
+      // Titre : le premier non vide rencontré (souvent celui du sommaire,
+      // propre : « GENERAL », « LIMITATIONS »). Début : la première
+      // occurrence HORS sommaire (le vrai début de la section).
+      const title = (list.find((c) => c.title) || { title: '' }).title;
+      const real = list.find((c) => !tocPages.has(c.startPage));
+      return { num, title, startPage: real ? real.startPage : list[0].startPage };
+    })
     .sort((a, b) => a.startPage - b.startPage);
   for (const s of ordered) {
     const label = kind === 'sections'

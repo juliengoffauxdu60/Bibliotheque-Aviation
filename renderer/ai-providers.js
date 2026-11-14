@@ -156,8 +156,36 @@ export function extractAnswer(providerId, data) {
   return text;
 }
 
-// Traduit une erreur HTTP en message clair.
-export function mapHttpError(status, endpoint) {
+// Message d'erreur renvoyé par le fournisseur lui-même (corps JSON
+// { error: { message } }) : c'est lui qui dit POURQUOI ça a échoué
+// (« The model is overloaded », « API key not valid »…) — sans lui, on
+// ne voit que le code HTTP et l'utilisateur ne sait pas quoi faire.
+function providerErrorMessage(data) {
+  const m = data && data.error && typeof data.error.message === 'string' ? data.error.message : '';
+  return m.trim();
+}
+
+// Traduit une erreur HTTP en message clair. `detail` est le message du
+// fournisseur (s'il en a donné un) : il précise la cause réelle —
+// surcharge du modèle, clé invalide, API non activée, quota dépassé —
+// au lieu d'un simple code.
+export function mapHttpError(status, endpoint, detail = '') {
+  const d = String(detail || '');
+  if (/overloaded/i.test(d)) {
+    return aiError('Le modèle est surchargé en ce moment : le fournisseur demande de réessayer dans un moment. Si ça persiste, essayez un autre modèle (par exemple « gemini-3.6-flash ») dans « Réglages IA ».');
+  }
+  if (/API key not valid/i.test(d)) {
+    return aiError('La clé API a été refusée par le fournisseur. Vérifiez la clé dans « Réglages IA ».');
+  }
+  if (/is not found|not found for API version/i.test(d)) {
+    return aiError('Le fournisseur ne connaît pas ce modèle ou cette adresse. Vérifiez le nom du modèle et l’adresse du point de terminaison dans « Réglages IA ».');
+  }
+  if (/has not been used|is disabled|not enabled/i.test(d)) {
+    return aiError('L’API du fournisseur n’est pas activée pour ce projet. Dans Google AI Studio, vérifiez que l’API Generative Language est activée pour la clé.');
+  }
+  if (/quota|exceeded/i.test(d)) {
+    return aiError('Quota dépassé chez le fournisseur. Réessayez plus tard ou vérifiez votre forfait.');
+  }
   if (status === 401 || status === 403) {
     return aiError('La clé API a été refusée par le fournisseur. Vérifiez la clé dans « Réglages IA ».');
   }
@@ -171,7 +199,9 @@ export function mapHttpError(status, endpoint) {
     return aiError('Le fournisseur a refusé la demande. Vérifiez le nom du modèle dans « Réglages IA ».');
   }
   if (status >= 500) {
-    return aiError(`Le fournisseur a renvoyé une erreur (code ${status}). Réessayez dans un moment.`);
+    return aiError(d
+      ? `Le fournisseur a renvoyé une erreur (code ${status}) : ${d.slice(0, 160)}`
+      : `Le fournisseur a renvoyé une erreur (code ${status}). Réessayez dans un moment.`);
   }
   return aiError(`Le fournisseur a renvoyé une erreur (code ${status}).`);
 }
@@ -196,8 +226,12 @@ export function mapNetworkError(err, endpoint) {
 
 // Appel complet : validation, requête, lecture de la réponse.
 // `fetchImpl` est injectable pour les tests (fetch natif par défaut).
+// `opts.retryDelaysMs` : délais entre les nouvelles tentatives sur 429/503
+// (par défaut 2 s puis 5 s — Google conseille de réessayer quand le
+// modèle est surchargé ; sans nouvelle tentative, un 503 passager
+// ressemble à une panne). `opts.sleepImpl` est injectable pour les tests.
 // Lève une Error avec .userMessage en français clair en cas d'échec.
-export async function callProvider(settings, prompt, fetchImpl = globalThis.fetch) {
+export async function callProvider(settings, prompt, fetchImpl = globalThis.fetch, opts = {}) {
   const providerId = settings.provider;
   const def = PROVIDERS[providerId];
   if (!def) {
@@ -215,24 +249,39 @@ export async function callProvider(settings, prompt, fetchImpl = globalThis.fetc
     throw aiError('Il manque la clé API. Enregistrez-la dans « Réglages IA ».');
   }
   const { url, options } = buildRequest(providerId, { model, endpoint, key: settings.key || '' }, prompt);
+  const retryDelays = Array.isArray(opts.retryDelaysMs) ? opts.retryDelaysMs : [2000, 5000];
+  const sleepFn = typeof opts.sleepImpl === 'function' ? opts.sleepImpl : ((ms) => new Promise((r) => setTimeout(r, ms)));
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 120000);
-  let res;
   try {
-    res = await fetchImpl(url, { ...options, signal: ctrl.signal });
-  } catch (e) {
+    for (let attempt = 0; ; attempt++) {
+      let res;
+      try {
+        res = await fetchImpl(url, { ...options, signal: ctrl.signal });
+      } catch (e) {
+        throw mapNetworkError(e, endpoint);
+      }
+      if (res.ok) {
+        let data;
+        try {
+          data = await res.json();
+        } catch {
+          throw aiError('La réponse du fournisseur n’a pas pu être lue. Réessayez.');
+        }
+        return extractAnswer(providerId, data);
+      }
+      // Erreur HTTP : on lit le message du fournisseur avant de décider.
+      let detail = '';
+      try { detail = providerErrorMessage(await res.json()); } catch { /* corps illisible */ }
+      if ((res.status === 429 || res.status === 503) && attempt < retryDelays.length) {
+        await sleepFn(retryDelays[attempt]);
+        continue;
+      }
+      throw mapHttpError(res.status, endpoint, detail);
+    }
+  } finally {
     clearTimeout(timer);
-    throw mapNetworkError(e, endpoint);
   }
-  clearTimeout(timer);
-  if (!res.ok) throw mapHttpError(res.status, endpoint);
-  let data;
-  try {
-    data = await res.json();
-  } catch {
-    throw aiError('La réponse du fournisseur n’a pas pu être lue. Réessayez.');
-  }
-  return extractAnswer(providerId, data);
 }
 
 // ---------------------------------------------------------------------------

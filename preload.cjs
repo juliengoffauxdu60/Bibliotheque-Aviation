@@ -15,6 +15,9 @@ contextBridge.exposeInMainWorld('pohDesktop', {
     ocrFinish: (docId) => ipcRenderer.invoke('poh-import:ocr-finish', { docId }),
     ocrCancel: (docId) => ipcRenderer.invoke('poh-import:ocr-cancel', { docId }),
     deleteDoc: (docId) => ipcRenderer.invoke('poh-import:delete', { docId }),
+    hiddenList: () => ipcRenderer.invoke('poh-import:hidden-list'),
+    hideDoc: (docId) => ipcRenderer.invoke('poh-import:hide-doc', { docId }),
+    unhideDoc: (docId) => ipcRenderer.invoke('poh-import:unhide-doc', { docId }),
   },
   ai: {
     getSettings: () => ipcRenderer.invoke('ai:get-settings'),

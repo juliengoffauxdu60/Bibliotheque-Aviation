@@ -292,6 +292,28 @@ async function runSelfTest(win) {
     (v) => v === '39,75 L');
   await shot('06-outils');
 
+  // Chevauchement (14 nov., capture de Julien) : avec 6 fausses cartes de
+  // plus, la colonne de gauche dépasse la grille ; elle doit défiler dans
+  // la grille au lieu de se peindre par-dessus « Outils ».
+  await step('chevauchement : colonne trop haute -> défile, rien ne déborde sur les outils',
+    `(() => { const wrap = document.querySelector('#docCards'); for (let i = 0; i < 6; i++) { const b = document.createElement('button'); b.type = 'button'; b.className = 'doc-card'; b.innerHTML = '<span class="doc-name">TEST ' + i + '</span><br><span class="doc-sub">Document de test pour le contrôle de débordement</span><br><span class="doc-pages">100 pages</span>'; wrap.appendChild(b); } return window.__poh.search('fuel').then(() => { const info = window.__poh.layoutOverlapInfo(); document.querySelectorAll('#docCards .doc-card').forEach((c) => { if ((c.querySelector('.doc-name') || {}).textContent.startsWith('TEST')) c.remove(); }); return info; }); })()`,
+    (v) => { try { const o = JSON.parse(v); return o.overlap === false; } catch { return false; } });
+
+  // Masquer un document fourni (14 nov.) : 172R masqué, rechargement,
+  // 3 documents restants, carte 172R absente ; puis restauration (4 docs).
+  await step('masquer 172R : enregistré dans la liste des masqués',
+    `window.pohDesktop.import.hideDoc('c172r').then(r => window.pohDesktop.import.hiddenList().then(l => { const s = 'ok=' + r.ok + ' cachés=' + l.map(h => h.id).join(','); window.location.reload(); return s; }))`,
+    (v) => v === 'ok=true cachés=c172r');
+  await step('masquer 172R : après rechargement, 3 documents, carte 172R absente',
+    `new Promise((resolve) => { const t = setInterval(() => { if (window.__poh && window.__poh.ready) { clearInterval(t); window.__poh.ready().then(() => resolve('docs=' + window.__poh.state().docsLoaded + ' carte172r=' + (document.querySelector('.doc-card[data-doc="c172r"]') ? 'présente' : 'absente'))); } }, 200); setTimeout(() => { clearInterval(t); resolve('timeout'); }, 15000); })`,
+    (v) => v === 'docs=3 carte172r=absente');
+  await step('restaurer 172R : 4 documents de nouveau',
+    `window.pohDesktop.import.unhideDoc('c172r').then(r => { window.location.reload(); return 'ok=' + r.ok; })`,
+    (v) => v === 'ok=true');
+  await step('restaurer 172R : après rechargement, 4 documents',
+    `new Promise((resolve) => { const t = setInterval(() => { if (window.__poh && window.__poh.ready) { clearInterval(t); window.__poh.ready().then(() => resolve('docs=' + window.__poh.state().docsLoaded)); } }, 200); setTimeout(() => { clearInterval(t); resolve('timeout'); }, 15000); })`,
+    (v) => v === 'docs=4');
+
   await shot('05-sop-page-1');
   return out;
 }

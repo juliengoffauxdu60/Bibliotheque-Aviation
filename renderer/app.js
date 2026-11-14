@@ -73,6 +73,28 @@ async function loadData() {
     docsMeta.docs.map((d) => fetch('app://' + d.index).then((r) => r.json())),
   );
   docsMeta.docs.forEach((d, i) => { state.indexes[d.id] = indexes[i]; });
+  // Documents fournis masqués par l'utilisateur : retirés de la liste
+  // AVANT tout le reste (cartes, recherche, portée) — ils ne sont ni
+  // affichés, ni cherchés, ni chargés. Restauration depuis « Documents
+  // masqués » (import.js).
+  if (window.pohDesktop && window.pohDesktop.import && window.pohDesktop.import.hiddenList) {
+    try {
+      const hidden = await window.pohDesktop.import.hiddenList();
+      const hiddenIds = new Set((hidden || []).map((h) => h.id));
+      if (hiddenIds.size) {
+        docsMeta.docs = docsMeta.docs.filter((d) => !hiddenIds.has(d.id));
+        for (const id of hiddenIds) delete state.indexes[id];
+        const scope = document.getElementById('scopeSelect');
+        if (scope) {
+          for (const id of hiddenIds) {
+            const opt = scope.querySelector(`option[value="${id}"]`);
+            if (opt) opt.remove();
+          }
+          if (scope.value && hiddenIds.has(scope.value)) scope.value = 'all';
+        }
+      }
+    } catch { /* liste des masqués illisible : on garde les 4 fournis */ }
+  }
   // Documents importés (registre userData/pohs) : même format que les index
   // fournis, chargés avec eux — c'est LA source unique de vérité pour la
   // recherche (ordre : les 4 fournis, puis les importés par date d'ajout).
@@ -538,9 +560,52 @@ state.ready = (async () => {
   initTools();
   bindEvents();
   updateReaderChromeSafe();
-  // Document par défaut : 172N, page 1 (comme une puce document).
-  await openDocPage('c172n', 1);
+  // Document par défaut : le premier document visible (172N d'habitude ;
+  // si l'utilisateur l'a masqué, c'est le suivant). Aucun document :
+  // le lecteur reste sur son message vide.
+  const firstDoc = state.docsMeta.docs[0];
+  if (firstDoc) await openDocPage(firstDoc.id, 1);
 })();
+
+// Chevauchement de la colonne de gauche sur les outils (auto-test) :
+// la grille a une hauteur fixe ; si les cartes + puces de sections +
+// navigation des résultats dépassent son bas, elles peignent par-dessus
+// la section « Outils » qui suit. Le correctif (.left-col défilante)
+// fait défiler la colonne dans la grille au lieu de déborder.
+// Mesure : on compare les rects VISIBLES (intersection avec la boîte
+// de la colonne — getBoundingClientRect seul ne distingue pas un contenu
+// rogné par le défilement d'un contenu qui peint par-dessus les outils).
+function layoutOverlapInfo() {
+  const grid = document.querySelector('.grid');
+  const leftCol = document.querySelector('.left-col');
+  const sections = document.querySelector('.sections-block');
+  const nav = document.querySelector('.results-nav');
+  const tools = document.querySelector('section.tools');
+  if (!grid || !leftCol || !sections || !nav || !tools) return JSON.stringify({ error: 'éléments introuvables' });
+  const r = (el) => el.getBoundingClientRect();
+  const inter = (a, b) => {
+    const x0 = Math.max(a.left, b.left), y0 = Math.max(a.top, b.top);
+    const x1 = Math.min(a.right, b.right), y1 = Math.min(a.bottom, b.bottom);
+    return (x1 > x0 && y1 > y0) ? { left: x0, top: y0, right: x1, bottom: y1 } : null;
+  };
+  const hits = (a, b) => !!a && !!b && a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+  const col = r(leftCol);
+  const toolsH2 = r(tools.querySelector('h2') || tools);
+  // Zone réellement peinte : si la colonne rogne son contenu (défilement),
+  // c'est l'intersection avec sa boîte ; sinon (ancien code, débordement
+  // visible), c'est le rectangle entier — qui peut atteindre les outils.
+  const clips = getComputedStyle(leftCol).overflowY !== 'visible';
+  const visSections = clips ? inter(r(sections), col) : r(sections);
+  const visNav = clips ? inter(r(nav), col) : r(nav);
+  const info = {
+    gridBottom: Math.round(r(grid).bottom),
+    sectionsBottom: Math.round(r(sections).bottom),
+    resultsNavBottom: Math.round(r(nav).bottom),
+    leftColScrolls: leftCol.scrollHeight > leftCol.clientHeight + 1,
+    overlap: hits(visSections, toolsH2) || hits(visNav, toolsH2),
+  };
+  return JSON.stringify(info);
+}
 
 // API utilisée par l'auto-test (main.js, POH_SELFTEST=1) — état réel de l'appli.
 window.__poh = {
@@ -577,6 +642,7 @@ window.__poh = {
   },
   centeringInfo,
   floatingNavInfo,
+  layoutOverlapInfo,
   nonBlankPixels: () => nonBlankPixels(),
   convert: (kind, value) => convertValue(kind, value),
   calc: (expr) => evaluateExpression(expr),
