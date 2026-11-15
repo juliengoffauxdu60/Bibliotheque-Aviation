@@ -122,6 +122,12 @@ main { padding: 14px 22px 8px; }
 .card-hits:empty { min-height: 0; margin: 0; }
 
 .section-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+/* Deux rangées (v1.2.1) : chapitres puis sous-sections du chapitre
+   courant. Une rangée vide ne prend aucune place : un document simple
+   garde une seule rangée, comme aujourd'hui. */
+.section-chips-wrap { display: grid; gap: 6px; }
+.section-chips-row:empty { display: none; }
+.chip.chapter-chip { font-weight: 700; }
 .chip {
   padding: 5px 10px; font-size: 13px; border-radius: 999px;
   border: 1px solid var(--line); background: var(--card); white-space: nowrap;
@@ -210,6 +216,11 @@ main { padding: 14px 22px 8px; }
   padding: 8px 10px; border-radius: 6px; font-weight: 400;
 }
 .sections-menu button:hover { background: var(--blue-soft); }
+.sections-menu button.active { background: var(--blue-soft); }
+/* Menu à deux niveaux (v1.2.1) : chapitres en en-têtes gras,
+   sous-sections indentées. Document simple : aspect inchangé. */
+.sections-menu button.menu-chapter { font-weight: 700; }
+.sections-menu button.menu-sub { padding-left: 26px; }
 .sections-menu button .pg { color: var(--muted); white-space: nowrap; }
 
 /* Outils : pleine largeur, sous la grille */

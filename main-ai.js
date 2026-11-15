@@ -17,6 +17,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   PROVIDERS, PROVIDER_IDS, maskKey, aiError, buildPrompt, callProvider,
+  TEST_TIMEOUT_MS,
 } from './renderer/ai-providers.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -285,9 +286,15 @@ export function registerAiHandlers() {
       // Attention : safeStorage.decryptString est synchrone et, sur macOS,
       // peut attendre l'invite du trousseau — aucun délai ne peut le
       // borner ici. Deux bornes protègent quand même l'utilisateur :
-      //  - l'appel réseau ci-dessous (20 s) : il reste SOUS la limite de
+      //  - l'appel réseau ci-dessous (TEST_TIMEOUT_MS, 28 s — voir
+      //    renderer/ai-providers.js) : il reste SOUS la limite de
       //    30 s d'Electron pour un appel IPC (au-delà, l'appel est rejeté
-      //    avec « reply was never sent » — prouvé par reproduction) ;
+      //    avec « reply was never sent » — prouvé par reproduction).
+      //    28 s et pas 20 s : Google a mis 24 s à répondre le 15 nov.
+      //    2026 (même pour refuser une mauvaise clé) — avec 20 s le
+      //    test échouait alors que tout était bien configuré. Le bouton
+      //    Tester réessaie une fois en cas de dépassement de délai
+      //    (renderer/ai-settings.js, isTestTimeout) ;
       //  - côté rendu, le bouton Tester a son propre délai (45 s, filet de
       //    sécurité) et traduit « reply was never sent » en message clair
       //    qui mentionne le trousseau.
@@ -298,10 +305,16 @@ export function registerAiHandlers() {
         model: entry.model || def.defaultModel,
         endpoint: entry.endpoint || def.defaultEndpoint,
         key,
-      }, 'Réponds uniquement par le mot OK.', undefined, { timeoutMs: 20000 });
+      }, 'Réponds uniquement par le mot OK.', undefined, { timeoutMs: TEST_TIMEOUT_MS });
       return { ok: true, answer: answer.slice(0, 200) };
     } catch (e) {
-      return { ok: false, error: (e && e.userMessage) || 'Le test a échoué. Réessayez.' };
+      const error = (e && e.userMessage) || 'Le test a échoué. Réessayez.';
+      const out = { ok: false, error };
+      // Le code « timeout » dit au rendu que le test peut être réessayé
+      // une fois (voir isTestTimeout) — il n'est renvoyé que pour un
+      // dépassement de délai, jamais pour une clé refusée ou autre.
+      if (e && e.code) out.code = e.code;
+      return out;
     }
   });
 

@@ -1,3 +1,5 @@
+import { isTestTimeout } from 'app://renderer/ai-providers.js';
+
 // Page « Réglages IA » — logique.
 // Parle uniquement au processus principal via window.pohDesktop.ai (patch
 // préchargeur) : la clé en clair ne sort jamais de cette page vers le
@@ -9,13 +11,17 @@ let providers = [];
 let current = null;
 let testing = false;
 
-// Délais (le test réseau côté principal est borné à 20 s — voir
-// main-ai.js — donc 45 s côté rendu laisse une marge sans jamais laisser
-// « Test en cours… » figé si le processus principal ne répond pas, par
-// exemple quand l'invite du trousseau macOS bloque le déchiffrement de
-// la clé derrière la fenêtre ; Electron lui-même rejette un appel IPC
-// sans réponse au bout de 30 s — « reply was never sent », prouvé par
-// reproduction — et ce rejet est traduit ci-dessous en message clair).
+// Délais (le test réseau côté principal est borné à 28 s — voir
+// main-ai.js et TEST_TIMEOUT_MS dans ai-providers.js — donc 45 s côté
+// rendu laisse une marge sans jamais laisser « Test en cours… » figé si
+// le processus principal ne répond pas, par exemple quand l'invite du
+// trousseau macOS bloque le déchiffrement de la clé derrière la fenêtre ;
+// Electron lui-même rejette un appel IPC sans réponse au bout de 30 s —
+// « reply was never sent », prouvé par reproduction — et ce rejet est
+// traduit ci-dessous en message clair). En cas de dépassement de délai,
+// le test est réessayé UNE fois avant d'afficher l'erreur (voir le
+// gestionnaire du bouton Tester) : chaque essai reste un appel IPC
+// distinct, donc chacun reste sous la limite de 30 s.
 const TEST_TIMEOUT_MS = 45000;
 const SAVE_TIMEOUT_MS = 30000;
 const LOAD_TIMEOUT_MS = 15000;
@@ -180,18 +186,36 @@ function bind() {
     if (btn) btn.disabled = true;
     try {
       setStatus('Test en cours…');
-      let res;
-      try {
-        res = await withTimeout(api.test(), TEST_TIMEOUT_MS, TEST_TIMEOUT_MESSAGE);
-      } catch (err) {
-        setStatus((err && (err.isTimeout || isNoReply(err))) ? TEST_TIMEOUT_MESSAGE : 'Le test a échoué. Réessayez.', true);
-        return;
-      }
-      if (!res || !res.ok) {
+      // Deux essais au maximum, et seulement en cas de dépassement de
+      // délai (réseau trop lent ou appel IPC sans réponse — voir
+      // isTestTimeout). Une clé refusée ou un modèle inconnu ne donne
+      // pas droit à un nouvel essai : réessayer ne servirait à rien.
+      // Chaque essai est un appel IPC distinct, donc chacun reste sous
+      // la limite de 30 s d'Electron ; le statut dit ce qui se passe,
+      // jamais de silence.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        let res;
+        try {
+          res = await withTimeout(api.test(), TEST_TIMEOUT_MS, TEST_TIMEOUT_MESSAGE);
+        } catch (err) {
+          if (attempt === 0 && (err.isTimeout || isNoReply(err))) {
+            setStatus('Le test n’a pas répondu, nouvel essai…');
+            continue;
+          }
+          setStatus((err && (err.isTimeout || isNoReply(err))) ? TEST_TIMEOUT_MESSAGE : 'Le test a échoué. Réessayez.', true);
+          return;
+        }
+        if (res && res.ok) {
+          setStatus(`Connexion OK : le fournisseur a répondu « ${res.answer} ».`);
+          return;
+        }
+        if (attempt === 0 && isTestTimeout(res)) {
+          setStatus('La réponse tarde, nouvel essai…');
+          continue;
+        }
         setStatus((res && res.error) || 'Le test a échoué.', true);
         return;
       }
-      setStatus(`Connexion OK : le fournisseur a répondu « ${res.answer} ».`);
     } finally {
       testing = false;
       if (btn) btn.disabled = false;

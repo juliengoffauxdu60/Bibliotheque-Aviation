@@ -19,11 +19,32 @@ Sur une machine sans écran (serveur), lancer sous X virtuel :
 xvfb-run -a npm start
 ```
 
+## Nouveautés v1.2.1 (15 nov. 2026)
+
+- **Sections à deux niveaux** : les documents complexes sont découpés par
+  chapitres (GEN, RAC, MET…) avec leurs sous-sections numérotées dedans
+  (ex. « RAC 1.0 », « MET 9.0 ») — signets PDF avec hiérarchie quand ils
+  existent, sinon sommaire imprimé, sinon titres. Les documents simples
+  (POH, PA-44…) sont inchangés ; sans rien, « Section unique ». Les
+  documents déjà importés se remettent à niveau tout seuls à l'ouverture
+  (aucune réimportation à faire).
+- **Bouton « Tester » des réglages IA réparé** : le test attendait 20 s
+  alors que Google met 24 s à répondre — délai porté à 28 s (sous la
+  limite de 30 s d'Electron) avec un nouvel essai en cas de dépassement
+  de délai seulement.
+
 ## Tests
 
 ```bash
-npm test          # moteur de recherche seul (Node, 24 vérifications)
-npm run selftest  # l'application réelle sous Electron (34 vérifications
+node test/search.test.mjs    # moteur de recherche (25 vérifications)
+node test/import.test.mjs    # import + détection des sections (83 sans
+                             # les PDF GEN/RAC dans /tmp, 97 avec)
+node test/ai.test.mjs        # fournisseurs IA + réglages (122)
+node test/highlight.test.mjs # surlignage (32)
+node test/highlight-vertical.test.mjs  # surlignage vertical (9)
+node test/layered.test.mjs   # sections à chapitres (44)
+node test/refresh.test.mjs   # mise à niveau des anciens imports (31)
+npm run selftest  # l'application réelle sous Electron (48 vérifications
                   # dans l'appli : état vide, import d'un document fixture,
                   # recherches, feuilletage, centrage,
                   # bloc flottant, conversions, calculatrice…)
@@ -45,6 +66,9 @@ POH_WIDTH=390 POH_HEIGHT=844 xvfb-run -a npm run selftest
 | `preload.cjs` | Minimal volontairement : le rendu n'a besoin d'aucun accès Node. |
 | `renderer/index.html`, `styles.css`, `app.js` | Interface : recherche, cartes documents, puces de sections, liste de résultats, lecteur PDF. |
 | `renderer/search.js` | Moteur de recherche (mot entier, insensible à la casse et aux accents, synonymes FR↔EN, ordre de lecture). |
+| `renderer/sections.js` | Libellé complet d'une section (`GEN 1.0 — …`) pour le titre du lecteur, le menu, les résultats et les citations IA. |
+| `test/layered.test.mjs`, `test/refresh.test.mjs` | Tests des sections à chapitres et de la mise à niveau des anciens imports. |
+| `test/fixtures/multi-chapter-pdf.mjs` | Générateur d'un PDF synthétique de 12 pages avec vrais signets (chapitres GEN/AGA/RAC). |
 | `renderer/tools.js` | Conversions aéronautiques + calculatrice générale. |
 | `data/synonyms.json` | Synonymes FR↔EN, liste fixe (voir le statut « à confirmer » dans le rapport). |
 | `test/fixtures/synthetic/` | Fixtures synthétiques (index JSON de 3 documents fictifs + docs.json) : données de test uniquement, jamais empaquetées. Le PDF synthétique (10 pages) est généré par `test/fixtures/synthetic-pdf.mjs`. |
@@ -74,6 +98,11 @@ mais la copie vendue dans `assets/pdfjs/` est déjà dans le dépôt).
   change sur place. « Plus grand » (≈ 640 px) par défaut, centrage
   automatique ; « Page entière » en un clic. Bloc de navigation flottant
   épinglé en bas du lecteur.
+- **Sections à deux niveaux** (v1.2.1) : deux rangées de puces — chapitres
+  (GEN, RAC…) puis sous-sections du chapitre courant ; menu « Sections ▾ »
+  avec chapitres cliquables et sous-sections indentées ; cliquer une
+  section sélectionne celle-là même si deux sections partagent une page.
+  Les documents sans chapitre gardent une seule rangée, comme avant.
 - Avertissement OCR pour les documents scannés : la recherche sert à trouver la page, les
   valeurs se lisent dans le PDF affiché.
 - Outils (conversions + calculatrice générale) en pleine largeur sous la

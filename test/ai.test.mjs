@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import {
   PROVIDERS, maskKey, buildRequest, extractAnswer, mapHttpError,
   mapNetworkError, callProvider, buildPrompt, aiError,
+  TEST_TIMEOUT_MS, isTestTimeout,
 } from '../renderer/ai-providers.js';
 import { extractQuestionTerms, extractQuestionPhrases, retrieveContext } from '../renderer/ai-retrieve.js';
 import { buildTermRegex } from '../renderer/search.js';
@@ -312,8 +313,9 @@ check('modèle/endpoint vides : défauts du fournisseur affichés', [res.setting
 // rejetait ou quand le processus principal ne répondait pas (invite du
 // trousseau macOS qui bloque le déchiffrement) — le statut restait figé
 // sur « Test en cours… ». Les bornes : appel réseau du test limité à
-// 20 s côté principal (opts.timeoutMs, sous la limite IPC de 30 s),
-// délai de 45 s côté rendu (filet de sécurité).
+// 28 s côté principal (TEST_TIMEOUT_MS, sous la limite IPC de 30 s),
+// délai de 45 s côté rendu (filet de sécurité), un nouvel essai en cas
+// de dépassement de délai seulement.
 
 // 11a. Un fetch qui ne répond jamais est interrompu par timeoutMs.
 const hangingFetch = fakeFetch((_url, options) => new Promise((_resolve, reject) => {
@@ -353,6 +355,55 @@ globalThis.fetch = realFetchForSection10;
 await callIpc('ai:clear-key');
 res = await callIpc('ai:test');
 check('régression test muet : ai:test sans clé -> {ok:false} avec message lisible', [res.ok, typeof res.error === 'string' && res.error.includes('clé')], [false, true]);
+
+// 11d. Correctif « Tester trop lent » (v1.2.1, 15 nov.) : Google a mis
+// 24 s à répondre (même pour refuser une mauvaise clé) — l'ancien délai
+// de 20 s faisait échouer le test alors que tout était bien configuré.
+// Le délai est 28 s (sous la limite IPC de 30 s) et le rendu réessaie
+// une fois sur dépassement de délai seulement.
+// (a) La constante : 28 s, sous 30 s, au-dessus des 24 s mesurés.
+check('tester trop lent : TEST_TIMEOUT_MS vaut 28 s', TEST_TIMEOUT_MS, 28000);
+check('tester trop lent : TEST_TIMEOUT_MS sous la limite IPC de 30 s', TEST_TIMEOUT_MS < 30000, true);
+check('tester trop lent : TEST_TIMEOUT_MS au-dessus des 24 s mesurés chez Google', TEST_TIMEOUT_MS > 24000, true);
+// (b) Le gestionnaire ai:test utilise bien la constante (garde contre
+// un retour à une valeur codée en dur).
+const mainAiSource = fs.readFileSync(path.join(base, 'main-ai.js'), 'utf8');
+check('tester trop lent : main-ai.js utilise TEST_TIMEOUT_MS', mainAiSource.includes('timeoutMs: TEST_TIMEOUT_MS'), true);
+check('tester trop lent : main-ai.js n’a plus de 20000 codé en dur', mainAiSource.includes('timeoutMs: 20000'), false);
+// (c) Un dépassement de délai porte le code « timeout » (déclencheur du
+// nouvel essai) — message français inchangé.
+let timeoutErr = null;
+try {
+  await callProvider({ provider: 'openai', model: 'gpt-4o-mini', endpoint: PROVIDERS.openai.defaultEndpoint, key: 'CLE-FAUSSE' }, promptTest, hangingFetch, { timeoutMs: 50 });
+} catch (e) { timeoutErr = e; }
+check('tester trop lent : dépassement de délai -> code timeout', timeoutErr && timeoutErr.code, 'timeout');
+check('tester trop lent : dépassement de délai -> message français inchangé', timeoutErr && timeoutErr.userMessage, 'La réponse a mis trop de temps à arriver. Réessayez.');
+// (d) isTestTimeout : seul un dépassement de délai donne droit à un
+// nouvel essai — pas une clé refusée, pas un succès.
+check('tester trop lent : isTestTimeout({ok:false, code:timeout})', isTestTimeout({ ok: false, code: 'timeout' }), true);
+check('tester trop lent : isTestTimeout({ok:false, clé refusée})', isTestTimeout({ ok: false, error: 'La clé API a été refusée.' }), false);
+check('tester trop lent : isTestTimeout({ok:true})', isTestTimeout({ ok: true }), false);
+const ipcTimeoutErr = new Error('Le test n’a pas répondu à temps.'); ipcTimeoutErr.isTimeout = true;
+check('tester trop lent : isTestTimeout(erreur délai rendu)', isTestTimeout(ipcTimeoutErr), true);
+check('tester trop lent : isTestTimeout(reply was never sent)', isTestTimeout(new Error('Error invoking remote method \'ai:test\': No handler registered for \'ai:test\' — reply was never sent')), true);
+check('tester trop lent : isTestTimeout(autre erreur)', isTestTimeout(new Error('boom')), false);
+check('tester trop lent : isTestTimeout(null)', isTestTimeout(null), false);
+// (e) De bout en bout via le vrai gestionnaire ai:test : une réponse
+// lente mais dans le délai réussit (le cas de Julien : 24 s < 28 s,
+// ramené à 150 ms ici pour que le test reste rapide) ; une clé refusée
+// (401) échoue SANS code de nouvel essai.
+await callIpc('ai:save-settings', { provider: 'gemini', model: 'gemini-3.8-flash', endpoint: PROVIDERS.gemini.defaultEndpoint, key: FAUSSE_CLE_GEMINI });
+globalThis.fetch = async () => {
+  await new Promise((r) => setTimeout(r, 150));
+  return { ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: 'OK' }] } }] }) };
+};
+res = await callIpc('ai:test');
+check('tester trop lent : ai:test avec réponse lente -> succès', res.ok, true);
+globalThis.fetch = async () => ({ ok: false, status: 401, json: async () => ({}) });
+res = await callIpc('ai:test');
+check('tester trop lent : ai:test clé refusée -> échec sans code timeout', [res.ok, res.code], [false, undefined]);
+check('tester trop lent : ai:test clé refusée -> message lisible', typeof res.error === 'string' && res.error.includes('refusée'), true);
+globalThis.fetch = realFetchForSection10;
 
 // Nettoyage du dossier temporaire du faux Electron.
 fs.rmSync(electronStub.userDataDir, { recursive: true, force: true });

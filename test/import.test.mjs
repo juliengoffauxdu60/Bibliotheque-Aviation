@@ -144,9 +144,10 @@ check('AIM GEN (fixture) : 7 sections + début', detGen.sections.map((s) => s.ke
   ['front', '1.0', '2.0', '3.0', '4.0', '5.0', '6.0', '7.0']);
 check('AIM GEN (fixture) : pages de début (sommaire AIM 2026-1)', detGen.sections.map((s) => s.startPage),
   [1, 5, 12, 14, 18, 34, 55, 56]);
-check('AIM GEN (fixture) : sommaire seul -> 7/7 par ancres',
-  (() => { const t = detectTocSections(aimGen.pages, null); return t && t.sections.map((s) => s.startPage); })(),
-  [1, 5, 12, 14, 18, 34, 55, 56]);
+check('AIM GEN (fixture) : sommaire seul -> chapitre GEN + 7/7 par ancres',
+  (() => { const t = detectTocSections(aimGen.pages, null); return t && t.sections.map((s) => [s.key, s.startPage, s.level]); })(),
+  [['front', 1, 0], ['GEN', 5, 1], ['GEN 1.0', 5, 2], ['GEN 2.0', 12, 2], ['GEN 3.0', 14, 2],
+   ['GEN 4.0', 18, 2], ['GEN 5.0', 34, 2], ['GEN 6.0', 55, 2], ['GEN 7.0', 56, 2]]);
 
 // Sommaire imprimé, synthétique : sans étiquettes de page, le décalage
 // imprimé→PDF vient des ancres (médiane 4 sur 3 ancres).
@@ -242,13 +243,16 @@ const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
 const docSyn = await pdfjs.getDocument({ data: new Uint8Array(fs.readFileSync(synPdf)), isEvalSupported: false }).promise;
 check('signets synthétique : aucun', await detectOutlineSections(docSyn, syn.pages), null);
 // AIM GEN/RAC : signets présents (PDF téléchargés dans /tmp, sinon passé).
+// Forme à chapitres v1.2.1 : le chapitre (niveau 1) précède ses
+// sous-sections (niveau 2, clés qualifiées « GEN 1.0 »…), à la même page
+// de départ que sa première sous-section.
 for (const [nom, fichier, cles, pagesDebut] of [
   ['GEN', '/tmp/aim-gen.pdf',
-   ['front', '1.0', '2.0', '3.0', '4.0', '5.0', '6.0', '7.0'],
-   [1, 5, 12, 14, 18, 34, 55, 56]],
+   ['front', 'GEN', 'GEN 1.0', 'GEN 2.0', 'GEN 3.0', 'GEN 4.0', 'GEN 5.0', 'GEN 6.0', 'GEN 7.0'],
+   [1, 5, 5, 12, 14, 18, 34, 55, 56]],
   ['RAC', '/tmp/aim-rac.pdf',
-   ['front', '1.0', '2.0', '3.0', '4.0', '5.0', '6.0', '7.0', '8.0', '9.0', '10.0', '11.0', '12.0'],
-   [1, 11, 24, 37, 59, 81, 84, 89, 95, 100, 131, 134, 143]],
+   ['front', 'RAC', 'RAC 1.0', 'RAC 2.0', 'RAC 3.0', 'RAC 4.0', 'RAC 5.0', 'RAC 6.0', 'RAC 7.0', 'RAC 8.0', 'RAC 9.0', 'RAC 10.0', 'RAC 11.0', 'RAC 12.0'],
+   [1, 11, 11, 24, 37, 59, 81, 84, 89, 95, 100, 131, 134, 143]],
 ]) {
   if (!fs.existsSync(fichier)) { skip(`couches ${nom} (signets)`, 'PDF non téléchargé dans /tmp'); continue; }
   const exAim = await extractPdfText(fichier);
@@ -257,6 +261,9 @@ for (const [nom, fichier, cles, pagesDebut] of [
   check(`couches ${nom} : sections`, layAim.sections.map((s) => s.key), cles);
   check(`couches ${nom} : pages`, layAim.sections.map((s) => s.startPage), pagesDebut);
   check(`couches ${nom} : confiance signets`, layAim.sections[1].confidence, 0.95);
+  check(`couches ${nom} : chapitre niveau 1`, [layAim.sections[1].level, layAim.sections[1].key], [1, nom]);
+  check(`couches ${nom} : sous-sections niveau 2 + chapitre`, layAim.sections.slice(2).map((s) => [s.level, s.chapter]), layAim.sections.slice(2).map(() => [2, nom]));
+  check(`couches ${nom} : page de début -> première sous-section`, layAim.pageSection.get(pagesDebut[1]), `${nom} 1.0`);
 }
 // buildIndex : pageSection et sectionSource fournis par la détection en
 // couches (sinon, la passe titres — testée plus haut, clés inchangées).

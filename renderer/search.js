@@ -8,6 +8,7 @@
 // Le moteur travaille sur le texte ORIGINAL de l'index (positions exactes pour
 // l'extrait) avec des classes de caractères accentués, jamais sur un texte
 // normalisé dont les positions ne correspondraient plus à l'original.
+import { fullSectionLabel } from './sections.js';
 
 const ACCENT_CLASSES = {
   a: '[aàáâãäå]', c: '[cç]', e: '[eèéêë]', i: '[iìíîï]', n: '[nñ]',
@@ -153,7 +154,7 @@ export function searchDocs(docs, meta, query, synonyms, opts = {}) {
         page: page.pdf_page,
         printedLabel: page.printed_label || null,
         section: page.section,
-        sectionLabel: section ? section.label : ('Section ' + page.section),
+        sectionLabel: section ? fullSectionLabel(section) : ('Section ' + page.section),
         termFound,
         occurrences: occ,
         matchedTerms: matched,

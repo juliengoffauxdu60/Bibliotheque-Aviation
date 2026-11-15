@@ -59,7 +59,7 @@ function writeMeta(docId, meta) {
   fs.writeFileSync(path.join(docDir(docId), 'meta.json'), JSON.stringify(meta, null, 2), 'utf8');
 }
 
-function listImported() {
+async function listImported() {
   const base = pohsDir();
   if (!fs.existsSync(base)) return [];
   const out = [];
@@ -69,28 +69,27 @@ function listImported() {
     if (!fs.existsSync(metaPath)) continue;
     try {
       const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-      out.push(refreshImportedDoc(name, meta));
+      out.push(await refreshImportedDoc(name, meta));
     } catch (e) { console.warn(`[import] meta.json illisible pour ${name} : ${e.message}`); }
   }
   out.sort((a, b) => String(a.added_at || '').localeCompare(String(b.added_at || '')));
   return out;
 }
 
-// Réparation des imports déjà faits : la détection des sections a changé
-// (les sommaires ne comptent plus comme début de section — le PA-44 de
-// Julien démarrait ses 10 sections p. 25). À chaque lecture du registre,
-// on recalcule les sections depuis le texte déjà stocké dans index.json
-// (aucun OCR à refaire) et on réécrit index.json + meta.json quand ça
-// diffère. Le titre perd aussi son « .pdf » éventuel (« PA44.PDF »).
-// EXCEPTION (v1.1.3) : les sections issues des signets PDF (outline) ou
-// du sommaire imprimé (toc) ne sont PAS recalculées — la passe titres ne
-// les retrouverait pas (pages exactes des signets, sommaire dont les
-// numéros ne sont pas des pages) et les écraserait. Seul le nettoyage
-// du titre reste actif pour elles. Le recalcul reste actif pour les
-// sections issues de la passe titres (c'est lui qui a réparé le PA-44)
-// et pour les imports d'avant la v1.1.3 (sans sectionSource).
+// Réparation des imports déjà faits (v1.2.1) : la détection des sections
+// a changé — deux niveaux (chapitres + sous-sections, ex. « RAC 1.0 »)
+// au lieu d'une liste plate. À chaque lecture du registre, on remet à
+// niveau les documents qui ne sont pas encore au format 2 en relançant
+// la détection en couches (signets, sommaire, titres) sur le PDF stocké
+// — aucun OCR à refaire, aucune réimportation à demander. L'AIM de
+// Julien (importé en v1.1.1, sections plates fausses) se corrige tout
+// seul à la première ouverture de la v1.2.1.
+// Marqueur `meta.sectionFormat = 2` : une fois le document à niveau, le
+// recalcul ne se refait plus (chemin rapide : le PDF n'est plus rouvert
+// à chaque lancement — lire les signets coûte ~1 s sur un gros PDF). Le
+// titre perd aussi son « .pdf » éventuel (« PA44.PDF »).
 // Ne casse jamais la liste : toute erreur rend la méta telle quelle.
-function refreshImportedDoc(docId, meta) {
+async function refreshImportedDoc(docId, meta) {
   try {
     const indexPath = path.join(docDir(docId), 'index.json');
     if (!fs.existsSync(indexPath)) return meta;
@@ -98,21 +97,40 @@ function refreshImportedDoc(docId, meta) {
     if (!index || !Array.isArray(index.pages) || index.pages.length === 0) return meta;
     const cleanTitle = String(meta.title || '').replace(/\.pdf$/i, '').trim();
     const sameTitle = cleanTitle === meta.title && meta.doc && cleanTitle === meta.doc.title;
-    const sectionSource = meta.sectionSource || index.section_source;
-    if (sectionSource === 'outline' || sectionSource === 'toc') {
+    // Déjà au format 2 : rien à recalculer, sauf le titre.
+    if (meta.sectionFormat === 2) {
       if (sameTitle) return meta;
       meta.title = cleanTitle;
       if (meta.doc) meta.doc.title = cleanTitle;
       writeMeta(docId, meta);
       return meta;
     }
-    const { sections, pageSection } = detectSections(index.pages);
+    // Le PDF stocké (copie d'import) : par meta.pdf_file, sinon le seul
+    // PDF du dossier (imports très anciens sans pdf_file). Sans PDF, la
+    // détection en couches replie sur la passe titres.
+    let pdfPath = meta.pdf_file ? path.join(docDir(docId), meta.pdf_file) : null;
+    if (!pdfPath || !fs.existsSync(pdfPath)) {
+      const onlyPdf = fs.readdirSync(docDir(docId)).filter((f) => f.toLowerCase().endsWith('.pdf'));
+      pdfPath = onlyPdf.length === 1 ? path.join(docDir(docId), onlyPdf[0]) : null;
+    }
+    const layered = await detectSectionsLayered(pdfPath, index.pages);
+    const { kind, sections, pageSection, source } = layered;
     const sameSections = JSON.stringify(meta.doc && meta.doc.sections) === JSON.stringify(sections);
     const samePages = index.pages.every((p) => (pageSection.get(p.pdf_page) || 'front') === p.section);
-    if (sameSections && samePages && sameTitle) return meta;
+    const sameSource = (meta.sectionSource || index.section_source) === source;
+    if (sameSections && samePages && sameTitle && sameSource) {
+      // Sections déjà bonnes mais sans marqueur : on marque, sans
+      // réécrire l'index.
+      meta.sectionFormat = 2;
+      writeMeta(docId, meta);
+      return meta;
+    }
     for (const p of index.pages) p.section = pageSection.get(p.pdf_page) || 'front';
     fs.writeFileSync(indexPath, JSON.stringify(index), 'utf8');
     meta.title = cleanTitle;
+    meta.sectionFormat = 2;
+    meta.sectionDetection = kind;
+    meta.sectionSource = source;
     if (meta.doc) {
       meta.doc.title = cleanTitle;
       meta.doc.sections = sections;
@@ -190,7 +208,7 @@ async function importFile(filePath) {
   if (!extracted.numPages || extracted.numPages < 1) {
     return { ok: false, error: 'Ce PDF ne contient aucune page.' };
   }
-  const existing = new Set(listImported().map((m) => m.doc_id));
+  const existing = new Set((await listImported()).map((m) => m.doc_id));
   const docId = makeDocId(filePath, existing);
   const dir = docDir(docId);
   fs.mkdirSync(dir, { recursive: true });
@@ -238,6 +256,7 @@ async function importFile(filePath) {
     scannedThreshold: SCANNED_MEDIAN_CHARS,
     sectionDetection: kind,
     sectionSource: source,
+    sectionFormat: 2,
     doc: buildDocEntry({
       docId, title,
       short: shortLabel(filePath),
@@ -348,6 +367,7 @@ async function ocrFinish({ docId }) {
   meta.medianCharsPerPage = medianChars;
   meta.sectionDetection = kind;
   meta.sectionSource = source;
+  meta.sectionFormat = 2;
   meta.doc = buildDocEntry({
     docId, title: meta.title, short: meta.short,
     subtitle: `Importé le ${new Date(meta.added_at).toLocaleDateString('fr-CA')} — OCR (fra+eng) — ${sectionNote}`,
@@ -390,7 +410,7 @@ function deleteDoc({ docId }) {
 }
 
 export function registerImportHandlers() {
-  ipcMain.handle('poh-import:list', () => listImported());
+  ipcMain.handle('poh-import:list', async () => listImported());
   ipcMain.handle('poh-import:choose-file', async () => {
     const res = await dialog.showOpenDialog({
       title: 'Choisir un document (PDF)',

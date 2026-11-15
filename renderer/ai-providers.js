@@ -215,7 +215,12 @@ export function mapHttpError(status, endpoint, detail = '') {
 // locale) pour ne pas casser les appelants existants.
 export function mapNetworkError(err, endpoint, providerId) {
   if (err && err.name === 'AbortError') {
-    return aiError('La réponse a mis trop de temps à arriver. Réessayez.');
+    // Dépassement du délai : l'erreur porte un code lisible par le
+    // programme (le bouton Tester réessaie une fois sur ce code-là
+    // seulement — jamais sur une clé refusée ou un modèle inconnu).
+    const e = aiError('La réponse a mis trop de temps à arriver. Réessayez.');
+    e.code = 'timeout';
+    return e;
   }
   const code = (err && err.cause && err.cause.code) || err?.code || '';
   const msg = String((err && err.message) || '');
@@ -230,6 +235,28 @@ export function mapNetworkError(err, endpoint, providerId) {
   return aiError('La demande n’a pas pu partir. Vérifiez votre connexion Internet et réessayez.');
 }
 
+// Délai du test de connexion (bouton « Tester » — voir main-ai.js).
+// 28 s : mesuré le 15 nov. 2026, Google met 24 s à répondre (même pour
+// refuser une mauvaise clé, code 400) — l'ancien délai de 20 s faisait
+// échouer le test alors que tout était bien configuré. 28 s reste SOUS
+// la limite de 30 s d'Electron pour un appel IPC (au-delà, l'appel est
+// rejeté avec « reply was never sent » — prouvé par reproduction) ; le
+// bouton Tester réessaie une fois en cas de dépassement de délai (voir
+// isTestTimeout ci-dessous), jamais plus.
+export const TEST_TIMEOUT_MS = 28000;
+
+// Le test de connexion réessaie-t-il une fois sur cette valeur ?
+// `value` est soit la réponse { ok, error, code } du processus principal,
+// soit l'erreur levée par l'appel IPC. Seul un dépassement de délai donne
+// droit à un nouvel essai : une clé refusée ou un modèle inconnu ne
+// s'arrangera pas en réessayant.
+export function isTestTimeout(value) {
+  if (!value) return false;
+  if (value.ok === false && value.code === 'timeout') return true;
+  if (value.isTimeout) return true;
+  return /reply was never sent/i.test(value.message || '');
+}
+
 // Appel complet : validation, requête, lecture de la réponse.
 // `fetchImpl` est injectable pour les tests (fetch natif par défaut).
 // `opts.retryDelaysMs` : délais entre les nouvelles tentatives sur 429/503
@@ -237,7 +264,7 @@ export function mapNetworkError(err, endpoint, providerId) {
 // modèle est surchargé ; sans nouvelle tentative, un 503 passager
 // ressemble à une panne). `opts.sleepImpl` est injectable pour les tests.
 // `opts.timeoutMs` : durée maximale de l'appel (par défaut 120 s). Le
-// test de connexion utilise une durée courte (20 s) : un test ne doit
+// test de connexion utilise TEST_TIMEOUT_MS (28 s) : un test ne doit
 // jamais laisser « Test en cours… » figé des minutes — et il doit rester
 // SOUS la limite de 30 s d'Electron pour un appel IPC (au-delà, l'appel
 // est rejeté avec « reply was never sent » — prouvé par reproduction).

@@ -234,6 +234,36 @@ function isTocPage(page) {
 
 export function detectSections(pages) {
   const tocPages = new Set(pages.filter(isTocPage).map((p) => p.pdf_page));
+  // Pages de sommaire par le CONTENU (suite du sommaire sans titre en
+  // tête : l'AIM liste ses chapitres sur les p. 5-29, « TABLE DES
+  // MATIÈRES » n'apparaît qu'en tête de la première page). Le critère
+  // est celui de la couche sommaire (≥3 lignes à points de suite, ≥50 %
+  // des lignes — les pages de corps restent ≤0,45, vérifié sur l'AIM
+  // réel : sommaires 0,85-0,97, pages de contenu ≤0,45).
+  const tocContentPages = new Set(pages.filter(isTocPageForLayer).map((p) => p.pdf_page));
+  // Bloc de sommaire en TÊTE de document : la première série contiguë
+  // de pages de sommaire (par le contenu), à condition qu'elle commence
+  // dans les 30 premières pages. Une mention « N.0 » sur ces pages est
+  // une entrée de sommaire, jamais un départ de section — même quand la
+  // ligne est propre en début de ligne (AIM p. 14 : « 9.0 Systèmes
+  // d'avertissement… » sans points de suite sur la ligne, l'extraction
+  // ayant séparé les points de suite sur une autre ligne). Vérifié sur
+  // l'AIM réel : p. 7-34 contiguës, chute en p. 35 (premier contenu) ;
+  // GEN : p. 3-4. Un index en milieu de document (AIM p. 50-65) n'est
+  // PAS dans le bloc de tête : un vrai départ de section sur une page
+  // d'index (GEN 4.0 p. 18 du sommaire imprimé) n'est pas exclu.
+  const frontTocPages = new Set();
+  {
+    const first = pages.find((p) => p.pdf_page <= 30 && tocContentPages.has(p.pdf_page));
+    if (first) {
+      let started = false;
+      for (const p of pages) {
+        if (p.pdf_page < first.pdf_page) continue;
+        if (tocContentPages.has(p.pdf_page)) { frontTocPages.add(p.pdf_page); started = true; }
+        else if (started) break;
+      }
+    }
+  }
   const cands = new Map(); // numéro -> [{ startPage, title }] (ordre des pages)
   let kind = null;
   for (const page of pages) {
@@ -255,7 +285,7 @@ export function detectSections(pages) {
       if (kind && kind !== thisKind) continue; // un seul type par document
       if (!kind) kind = thisKind;
       if (!cands.has(num)) cands.set(num, []);
-      cands.get(num).push({ startPage: page.pdf_page, title: titleAfter(lines, i, rest) });
+      cands.get(num).push({ startPage: page.pdf_page, title: titleAfter(lines, i, rest), midLine: false, hasDots: /\.{2,}/.test(line) });
     }
   }
   // Deuxième passe : sections numérotées « N.0 Titre » (AIM, RAC…).
@@ -308,13 +338,13 @@ export function detectSections(pages) {
         // sommaire (RAC p. 4-10, sans « TABLE OF CONTENTS » en tête)
         // passaient pour le vrai début des sections.
         const tocLike = /\.{2,}\s*\d{1,3}\s*$/.test(lines[i]);
-        cands.get(num).push({ startPage: page.pdf_page, title, tocLike });
+        cands.get(num).push({ startPage: page.pdf_page, title, tocLike, midLine, hasDots: /\.{2,}/.test(lines[i]) });
       }
     }
   }
-  const sections = [{ key: 'front', label: 'Début du document', startPage: 1 }];
+  const sections = [{ key: 'front', label: 'Début du document', startPage: 1, level: 0 }];
   if (!kind) {
-    sections.push({ key: '1', label: 'Section unique — document entier', startPage: 1 });
+    sections.push({ key: '1', label: 'Section unique — document entier', startPage: 1, level: 2 });
     return { kind: 'none', sections, pageSection: new Map(pages.map((p) => [p.pdf_page, '1'])) };
   }
   const ordered = [...cands.entries()]
@@ -325,7 +355,30 @@ export function detectSections(pages) {
       // ligne de sommaire (page de sommaire, ou points de suite suivis
       // d'un numéro de page) ne compte jamais comme début.
       const title = (list.find((c) => c.title) || { title: '' }).title;
-      const real = list.find((c) => !tocPages.has(c.startPage) && !c.tocLike);
+      // Vrai début : hors page de sommaire. Sur une page de sommaire
+      // (par le contenu), seule une ligne de titre PROPRE en début de
+      // ligne compte — une mention en milieu de ligne (« ... 126 |
+      // 9.0 ... », fusion de colonnes) ou une ligne à points de suite
+      // n'est jamais un début de section. En revanche une page de
+      // sommaire peut ÊTRE le contenu d'une section (GEN p. 18 : la
+      // page EST la section 4.0 « Index des mots clés ») : sa ligne de
+      // titre propre en début de ligne reste valable — sauf si la page
+      // est dans le bloc de sommaire en TÊTE du document (frontTocPages :
+      // AIM p. 14, entrée de sommaire propre en début de ligne). Repli :
+      // première occurrence (mieux que rien).
+      // Limite connue (passe plate) : les numéros recommencent à chaque
+      // chapitre (AIM : chaque chapitre a son « 7.0 ») — la passe ne
+      // peut pas les distinguer ; la couche signets (chapitres) le peut.
+      // Autres limites du repli, vérifiées sur l'AIM réel : un titre
+      // fusionné en milieu de ligne trop court (« 9.2.2 Marques 10.0
+      // Prise de décision… », 14 caractères avant) n'est pas retenu, et
+      // un titre absent du texte extrait (« 5.0 Divers » p. 66 : la
+      // page est la fin de l'index, le titre n'y figure qu'en renvoi)
+      // renvoie à la mention suivante (p. 98). La couche signets donne
+      // les bonnes pages dans ces cas (GEN 5.0 p. 66, AGA 10.0 p. 120).
+      const real = list.find((c) =>
+        !tocPages.has(c.startPage) && !c.tocLike && !frontTocPages.has(c.startPage) &&
+        !(tocContentPages.has(c.startPage) && (c.midLine || c.hasDots)));
       return { num, title, startPage: real ? real.startPage : list[0].startPage };
     })
     .sort((a, b) => a.startPage - b.startPage);
@@ -335,7 +388,7 @@ export function detectSections(pages) {
       : kind === 'numbered'
         ? (s.title ? `${s.num} — ${s.title}` : s.num)
         : (s.title ? `Chapitre ${s.num} — ${s.title}` : `Chapitre ${s.num}`);
-    sections.push({ key: s.num, label, startPage: s.startPage });
+    sections.push({ key: s.num, label, startPage: s.startPage, level: 2 });
   }
   const pageSection = new Map();
   for (const p of pages) {
@@ -366,26 +419,39 @@ export function tagSectionsSource(sections, source, confidence) {
   return sections.map((s) => ({ ...s, source, confidence: s.key === 'front' ? 1 : confidence }));
 }
 
-// Assemblage commun aux couches outline / toc : dédoublonne (même clé ou
-// même page de début — on garde la première), trie par page, exige ≥2
-// sections, ajoute « Début du document » et construit pageSection.
+// Assemblage commun aux couches outline / toc : dédoublonne (même clé, ou
+// même page de début pour deux entrées du même niveau dans le même
+// chapitre — on garde la première), trie par page (à égalité : chapitre
+// avant sa première sous-section), exige ≥2 sections — ou 1 chapitre
+// seul (un document avec des chapitres mais sans sous-sections
+// numérotées montre quand même ses chapitres), ajoute
+// « Début du document » et construit pageSection.
 // `confidence` est la valeur par défaut ; une entrée peut porter la
 // sienne (sommaire : 0.9 par étiquettes, 0.8 par ancres).
+// Niveaux (v1.2.1) : 0 = début du document, 1 = chapitre, 2 =
+// sous-section (défaut quand le champ est absent — anciennes données).
 function finishLayeredSections(found, pages, source, confidence) {
   const seenKeys = new Set();
-  const seenPages = new Set();
+  const seenSlots = new Set();
   const uniq = [];
   for (const s of found) {
-    if (!s || seenKeys.has(s.key) || seenPages.has(s.startPage)) continue;
+    if (!s) continue;
+    if (seenKeys.has(s.key)) continue;
+    // Même page de début : autorisée entre un chapitre et sa première
+    // sous-section (même page, niveaux différents) ; deux entrées du
+    // même niveau, dans le même chapitre, sur la même page restent un
+    // doublon (la première gagne).
+    const slot = `${s.startPage}|${s.level ?? 2}|${s.chapter || ''}`;
+    if (seenSlots.has(slot)) continue;
     seenKeys.add(s.key);
-    seenPages.add(s.startPage);
+    seenSlots.add(slot);
     uniq.push(s);
   }
-  uniq.sort((a, b) => a.startPage - b.startPage);
-  if (uniq.length < 2) return null;
+  uniq.sort((a, b) => (a.startPage - b.startPage) || ((a.level ?? 2) - (b.level ?? 2)));
+  if (uniq.length < 2 && !uniq.some((s) => (s.level ?? 2) === 1)) return null;
   const sections = [
-    { key: 'front', label: 'Début du document', startPage: 1, source, confidence: 1 },
-    ...uniq.map((s) => ({ ...s, source, confidence: s.confidence ?? confidence })),
+    { key: 'front', label: 'Début du document', startPage: 1, level: 0, source, confidence: 1 },
+    ...uniq.map((s) => ({ level: 2, ...s, source, confidence: s.confidence ?? confidence })),
   ];
   const pageSection = new Map();
   for (const p of pages) {
@@ -401,6 +467,69 @@ function finishLayeredSections(found, pages, source, confidence) {
 const OUTLINE_NUMBERED_RE = /^(\d{1,2})\.0\b\s*(.*)$/;
 const OUTLINE_SECTION_RE = /^SECTION\s+(\d{1,2})\b\s*(.*)$/i;
 const OUTLINE_CHAPTER_RE = /^(?:CHAPTER|CHAPITRE)\s+(\d{1,2})\b\s*(.*)$/i;
+const OUTLINE_PART_RE = /^(?:PART|PARTIE)\s+([IVXLCDM\d]+)\b\s*(.*)$/i;
+// Code de chapitre à la AIM (« GEN — Généralités », « RAC — Règles… ») :
+// 2 à 5 lettres capitales, tiret, nom du chapitre. Les numéros sont des
+// SOUS-sections : les grands chapitres sont ces codes (imprimés
+// verticalement dans la marge de l'AIM).
+const OUTLINE_CODE_RE = /^([A-Z]{2,5})\s*[—–-]\s*(.+)$/;
+const OUTLINE_CODE_BARE_RE = /^([A-Z]{2,5})$/;
+// Une entrée de sommaire : toute sa sous-arborescence est une copie du
+// sommaire imprimé (chapitres avec pages de sommaire, ex. AIM : GEN p.7,
+// AGA p.8…), pas les vrais départs — à exclure entièrement.
+const OUTLINE_TOC_RE = /^(table des matières|table of contents)$/i;
+// Pages de garde : jamais des sections (repli signets plats).
+const OUTLINE_NON_SECTION_RE = /^(couverture|colophon|page titre|title page|explication des changements|contents?|sommaire)$/i;
+
+// Classifie un titre de signet : { kind, num, code, rest } ou null.
+// kind : 'numbered' (« N.0 »), 'section' (« SECTION N »),
+// 'chapter' (« CHAPTER/CHAPITRE N »), 'part' (« PART/IE X »),
+// 'code' (« GEN — … »).
+function classifyOutlineTitle(title) {
+  let m = title.match(OUTLINE_NUMBERED_RE);
+  if (m) return { kind: 'numbered', num: `${parseInt(m[1], 10)}.0`, rest: m[2] || '' };
+  m = title.match(OUTLINE_SECTION_RE);
+  if (m) return { kind: 'section', num: String(parseInt(m[1], 10)), rest: m[2] || '' };
+  m = title.match(OUTLINE_CHAPTER_RE);
+  if (m) return { kind: 'chapter', num: String(parseInt(m[1], 10)), rest: m[2] || '' };
+  m = title.match(OUTLINE_PART_RE);
+  if (m) return { kind: 'part', num: String(m[1]).toUpperCase(), rest: m[2] || '' };
+  m = title.match(OUTLINE_CODE_RE);
+  if (m) return { kind: 'code', code: m[1], rest: m[2] || '' };
+  m = title.match(OUTLINE_CODE_BARE_RE);
+  if (m) return { kind: 'code', code: m[1], rest: '' };
+  return null;
+}
+
+// Clé + libellé d'un chapitre à partir de son titre.
+// (« GEN — Généralités » -> GEN ; « CHAPTER 3 — Design » -> ch3 ;
+// « PARTIE I » -> part-i ; autre titre -> slug.)
+function chapterKeyLabel(title) {
+  const info = classifyOutlineTitle(title);
+  if (info && info.kind === 'code') {
+    const t = cleanTitle(info.rest || '');
+    return { key: info.code, label: t ? `${info.code} — ${t}` : info.code };
+  }
+  if (info && info.kind === 'chapter') {
+    const t = cleanTitle(info.rest || '');
+    return { key: `ch${info.num}`, label: t ? `Chapitre ${info.num} — ${t}` : `Chapitre ${info.num}` };
+  }
+  if (info && info.kind === 'part') {
+    const t = cleanTitle(info.rest || '');
+    return { key: `part-${info.num.toLowerCase()}`, label: t ? `Partie ${info.num} — ${t}` : `Partie ${info.num}` };
+  }
+  const slug = String(title || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 20);
+  return { key: slug || 'chapitre', label: cleanTitle(title) || title };
+}
+
+// Libellé d'une sous-section numérotée (« 1.0 — Renseignements… »,
+// « Section 1 — General »).
+function numberedSectionLabel(kind, num, rest) {
+  const t = cleanTitle(rest || '');
+  if (kind === 'section') return t ? `Section ${num} — ${t}` : `Section ${num}`;
+  return t ? `${num} — ${t}` : num;
+}
 
 function cleanOutlineTitle(raw) {
   return String(raw || '').replace(/\s+/g, ' ').trim();
@@ -433,19 +562,28 @@ function outlineEntryToSection(title, startPage) {
 // Signets PDF : `doc` est un PDFDocumentProxy pdf.js déjà ouvert, `pages`
 // la liste { pdf_page, text } (pour pageSection). Retourne
 // { sections, pageSection } ou null (pas de signets utilisables).
-// Règles : on ne garde que les nœuds qui ressemblent à une section de
-// premier niveau, à toute profondeur — l'AIM range ses « 1.0 … 7.0 »
-// sous « GEN—General », et « Title Page » / « Table of Contents » ne
-// sont pas des sections. Repli : signets plats (tous au premier niveau,
-// sans numérotation reconnaissable) et ≥2 -> on les prend tels quels.
-// La destination est résolue comme le veut l'API : dest string ->
-// getDestination() puis getPageIndex() (0-based, +1) ; dest array ->
-// dest[0] est la réf de page. Un signet sans page résolvable est ignoré.
+//
+// HIÉRARCHIE (v1.2.1) : on garde la structure parent -> enfants au lieu
+// de l'aplatir. Un nœud est un CHAPITRE (niveau 1) s'il est nommé comme
+// tel (code « GEN — … », « CHAPTER N », « PARTIE I ») ou s'il regroupe
+// des sous-sections numérotées ; ses enfants numérotés (« N.0 »,
+// « SECTION N ») sont ses SOUS-sections (niveau 2, clé « GEN 1.0 » —
+// la numérotation recommence à chaque chapitre, une clé plate « 1.0 »
+// les confondrait). Un chapitre sans sous-sections numérotées est quand
+// même montré (dégradation gracieuse). Un signet numéroté hors chapitre
+// reste une section plate (« 1.0 »), comme avant.
+// Règles : la sous-arborescence « Table des matières » est écartée
+// (ses chapitres pointent vers des pages de sommaire) ; « Couverture »,
+// « Colophon », « Page titre » ne sont pas des sections. Repli : signets
+// plats (tous au premier niveau, sans numérotation reconnaissable) et
+// ≥2 -> on les prend tels quels. La destination est résolue comme le
+// veut l'API : dest string -> getDestination() puis getPageIndex()
+// (0-based, +1) ; dest array -> dest[0] est la réf de page. Un signet
+// sans page résolvable est ignoré (ses enfants remontent au parent).
 export async function detectOutlineSections(doc, pages) {
   let outline = null;
   try { outline = await doc.getOutline(); } catch { return null; }
   if (!outline || !outline.length) return null;
-  const flat = [];
   async function resolvePage(node) {
     try {
       const dest = node.dest;
@@ -458,34 +596,82 @@ export async function detectOutlineSections(doc, pages) {
     } catch { /* signet sans page résolvable : ignoré */ }
     return null;
   }
-  async function walk(nodes, depth) {
+  // Arbre { title, startPage, children } — hiérarchie conservée.
+  async function build(nodes) {
+    const out = [];
     for (const node of nodes || []) {
       if (!node) continue;
       const title = cleanOutlineTitle(node.title);
-      const page = title ? await resolvePage(node) : null;
-      if (title && page && page >= 1 && page <= doc.numPages) {
-        flat.push({ title, startPage: page, depth });
+      if (!title) continue;
+      if (OUTLINE_TOC_RE.test(title)) continue; // sommaire : branche entière écartée
+      const page = await resolvePage(node);
+      const children = await build(node.items);
+      if (page === null || page < 1 || page > doc.numPages) {
+        out.push(...children); // enfants remontés au parent
+        continue;
       }
-      if (node.items && node.items.length) await walk(node.items, depth + 1);
+      out.push({ title, startPage: page, children });
     }
+    return out;
   }
-  await walk(outline, 0);
-  if (!flat.length) return null;
-  let found = [];
-  for (const e of flat) {
-    const s = outlineEntryToSection(e.title, e.startPage);
-    if (s) found.push(s);
+  const roots = await build(outline);
+  if (!roots.length) return null;
+
+  const found = [];
+  function hasNumberedDescendant(node) {
+    for (const c of node.children) {
+      const info = classifyOutlineTitle(c.title);
+      if (info && (info.kind === 'numbered' || info.kind === 'section')) return true;
+      if (hasNumberedDescendant(c)) return true;
+    }
+    return false;
   }
-  if (found.length < 2) {
-    const topLevel = flat.filter((e) => e.depth === 0);
-    if (topLevel.length < 2 || topLevel.length !== flat.length) return null;
-    found = topLevel.map((e, i) => ({
-      key: `o${i + 1}`,
-      label: cleanTitle(e.title) || e.title,
-      startPage: e.startPage,
+  function visit(node, chapterCtx) {
+    const info = classifyOutlineTitle(node.title);
+    if (info && (info.kind === 'chapter' || info.kind === 'part' || info.kind === 'code')) {
+      const { key, label } = chapterKeyLabel(node.title);
+      found.push({ key, label, startPage: node.startPage, level: 1 });
+      const ctx = { key, label };
+      for (const child of node.children) visit(child, ctx);
+      return;
+    }
+    if (info && (info.kind === 'numbered' || info.kind === 'section')) {
+      const label = numberedSectionLabel(info.kind, info.num, info.rest);
+      if (chapterCtx) {
+        found.push({ key: `${chapterCtx.key} ${info.num}`, label, startPage: node.startPage, level: 2, chapter: chapterCtx.key, chapterLabel: chapterCtx.label });
+      } else {
+        found.push({ key: info.num, label, startPage: node.startPage, level: 2 });
+      }
+      return; // les enfants (1.1, 1.1.1) ne sont pas des sections
+    }
+    // Nœud de regroupement au premier niveau avec des sous-sections
+    // numérotées dedans (« Partie I »…) : c'est un chapitre. Dans un
+    // chapitre, un tel nœud est transparent (on garde le chapitre).
+    if (!chapterCtx && hasNumberedDescendant(node)) {
+      const { key, label } = chapterKeyLabel(node.title);
+      found.push({ key, label, startPage: node.startPage, level: 1 });
+      const ctx = { key, label };
+      for (const child of node.children) visit(child, ctx);
+      return;
+    }
+    for (const child of node.children) visit(child, chapterCtx);
+  }
+  for (const root of roots) visit(root, null);
+
+  if (found.length >= 2 || found.some((s) => s.level === 1)) {
+    return finishLayeredSections(found, pages, 'outline', 0.95);
+  }
+  // Repli : signets plats (tous au premier niveau, sans numérotation
+  // reconnaissable) et ≥2 -> on les prend tels quels (hors pages de
+  // garde et sommaire).
+  const contentRoots = roots.filter((r) => !OUTLINE_NON_SECTION_RE.test(r.title));
+  if (contentRoots.length >= 2 && contentRoots.every((r) => r.children.length === 0)) {
+    const flat = contentRoots.map((e, i) => ({
+      key: `o${i + 1}`, label: cleanTitle(e.title) || e.title, startPage: e.startPage, level: 2,
     }));
+    return finishLayeredSections(flat, pages, 'outline', 0.95);
   }
-  return finishLayeredSections(found, pages, 'outline', 0.95);
+  return null;
 }
 
 // --- Couche 2 : sommaire imprimé --------------------------------------------
@@ -574,7 +760,11 @@ export function detectTocSections(pages, pageLabels = null) {
   // sont pas des sous-sections numérotées (« 1.1 … ») — un sommaire
   // détaillé liste aussi les sous-sections, qui ne sont pas des sections.
   // Le motif est testé sur le titre brut (voir parseTocEntries).
-  let top = entries.filter((e) => TOC_TOP_RE.test(e.rawTitle || e.title));
+  // Les entrées de chapitre (« GEN — Généralités », « CHAPITRE 3 »)
+  // comptent aussi : elles ouvrent un chapitre dont les entrées
+  // numérotées suivantes sont les sous-sections.
+  let top = entries.filter((e) =>
+    TOC_TOP_RE.test(e.rawTitle || e.title) || OUTLINE_CODE_RE.test(e.rawTitle || e.title));
   if (!top.length) top = entries.filter((e) => !/^\d+\.\d+/.test(e.title));
   if (top.length < 2) return null;
   const numPages = Math.max(...pages.map((p) => p.pdf_page), 0);
@@ -621,6 +811,7 @@ export function detectTocSections(pages, pageLabels = null) {
     if (agreeing >= 2 && agreeing > offsets.length / 2) medianOffset = med;
   }
   const found = [];
+  let chapterCtx = null;
   for (const e of resolved) {
     let startPage = null;
     let confidence = null;
@@ -631,9 +822,25 @@ export function detectTocSections(pages, pageLabels = null) {
       if (p >= 1 && p <= numPages) { startPage = p; confidence = 0.8; }
     }
     if (startPage === null) continue;
+    // Entrée de chapitre : elle ouvre un chapitre (niveau 1) ; les
+    // entrées numérotées qui suivent en sont les sous-sections.
+    const info = classifyOutlineTitle(e.rawTitle || e.title);
+    if (info && (info.kind === 'chapter' || info.kind === 'part' || info.kind === 'code')) {
+      const { key, label } = chapterKeyLabel(e.rawTitle || e.title);
+      chapterCtx = { key, label };
+      found.push({ key, label, startPage, level: 1, confidence });
+      continue;
+    }
     const s = outlineEntryToSection(e.rawTitle || e.title, startPage)
       || tocPlainEntryToSection(e.title, startPage);
-    if (s) found.push({ ...s, confidence });
+    if (!s) continue;
+    if (chapterCtx) {
+      // Sous-section du chapitre courant : clé qualifiée (« GEN 1.0 ») —
+      // la numérotation recommence à chaque chapitre.
+      found.push({ ...s, key: `${chapterCtx.key} ${s.key}`, level: 2, chapter: chapterCtx.key, chapterLabel: chapterCtx.label, confidence });
+    } else {
+      found.push({ ...s, level: 2, confidence });
+    }
   }
   return finishLayeredSections(found, pages, 'toc', 0.8);
 }

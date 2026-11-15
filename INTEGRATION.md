@@ -9,6 +9,33 @@ et `test/fixtures/synthetic-pdf.mjs`, qui génère un PDF de 10 pages),
 jamais empaquetées (`package.json` → `build.files` : `assets/pdfjs/**`,
 `assets/tesseract/**`, `data/synonyms.json` seulement, plus le code).
 
+## Sections à deux niveaux + mise à niveau des anciens imports (v1.2.1, 15 nov. 2026)
+
+- `import-core.js` : `detectOutlineSections` hiérarchique (chapitres niveau 1
+  + sous-sections numérotées niveau 2, clés qualifiées `GEN 1.0`, sous-arbre
+  « Table des matières » exclu) ; `detectTocSections` sensible aux chapitres ;
+  `detectSections` (repli titres) exclut les pages de sommaire par le contenu
+  ET le bloc de sommaire en tête du document (première série contiguë de pages
+  de sommaire dans les 30 premières pages). Modèle : `front` niveau 0,
+  chapitre niveau 1, sous-section niveau 2 avec `chapter`/`chapterLabel`.
+  Vérifié sur le vrai AIM (569 p., local seulement) : 87 sections, 11 chapitres.
+- `main-import.js` : `listImported()` et `refreshImportedDoc()` async ;
+  le refresh relance `detectSectionsLayered` sur le PDF stocké pour tout
+  document sans `meta.sectionFormat === 2`, puis marque le format 2 (chemin
+  rapide ensuite) ; `importFile`/`ocrFinish` écrivent `sectionFormat: 2`.
+- `renderer/` : deux rangées de puces (chapitres + sous-sections), menu à deux
+  niveaux, clic qui colle (section épinglée + intervalle), `renderer/sections.js`
+  (`fullSectionLabel`) utilisé par le titre du lecteur, le menu, les résultats
+  et les citations IA. Auto-test 48/48.
+- Correctif « Tester » IA : `TEST_TIMEOUT_MS = 28000` dans
+  `renderer/ai-providers.js` (28 s < limite IPC 30 s, > 24 s mesurés chez
+  Google), `isTestTimeout`, `main-ai.js` renvoie `code: 'timeout'`,
+  `renderer/ai-settings.js` réessaie une fois sur dépassement de délai.
+- Tests : `test/layered.test.mjs` (44), `test/refresh.test.mjs` (31),
+  `test/fixtures/multi-chapter-pdf.mjs` (PDF synthétique 12 p. à vrais signets),
+  tests outline GEN/RAC mis à jour pour la forme à chapitres (ils sont ignorés
+  sans `/tmp/aim-gen.pdf` et `/tmp/aim-rac.pdf`, par conception).
+
 # Intégration — import POH + Réglages IA (14 nov. 2026, coordinateur)
 
 Patchs d'intégration appliqués après les livraisons des agents import/OCR et IA

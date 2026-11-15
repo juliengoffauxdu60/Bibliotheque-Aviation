@@ -4,6 +4,7 @@
 // re-rendre le canevas à partir du document déjà chargé, jamais recharger.
 import * as pdfjsLib from 'app://assets/pdfjs/pdf.mjs';
 import { searchDocs } from 'app://renderer/search.js';
+import { fullSectionLabel } from 'app://renderer/sections.js';
 import {
   ocrRectsForTerm, textRectsForTerm, pdfRectToCss, clampCssRect,
 } from 'app://renderer/highlight.js';
@@ -107,6 +108,62 @@ function sectionForPage(doc, page) {
   let current = doc.sections[0];
   for (const s of doc.sections) if (page >= s.startPage) current = s;
   return current;
+}
+
+// ---------------------------------------------------------------------------
+// Sections à deux niveaux (v1.2.1) : chapitres (niveau 1, ex. GEN, RAC)
+// et sous-sections (niveau 2, ex. « 1.0 — ... »). Les anciennes données
+// sans champ `level` sont traitées comme niveau 2 sans chapitre : un
+// document simple garde exactement l'interface d'aujourd'hui.
+// ---------------------------------------------------------------------------
+// Niveau d'une section : 0 = « Début du document », 1 = chapitre,
+// 2 = sous-section (défaut pour les données anciennes).
+function sectionLevel(s) { return s.level == null ? (s.key === 'front' ? 0 : 2) : s.level; }
+function chapters(doc) { return doc.sections.filter((s) => sectionLevel(s) === 1); }
+// Chapitre d'une sous-section : son champ `chapter`, ou à défaut le
+// dernier chapitre dont le début précède ou égale le sien.
+function chapterKeyOfSection(doc, s) {
+  if (s.chapter) return String(s.chapter);
+  let current = null;
+  for (const x of doc.sections) {
+    if (sectionLevel(x) === 1 && x.startPage <= s.startPage) current = x;
+  }
+  return current ? String(current.key) : null;
+}
+function chapterOfPage(doc, page) {
+  let current = null;
+  for (const s of doc.sections) {
+    if (sectionLevel(s) === 1 && page >= s.startPage) current = s;
+  }
+  return current ? String(current.key) : null;
+}
+function subsectionsOfChapter(doc, chapterKey) {
+  return doc.sections.filter((s) =>
+    sectionLevel(s) === 2 && chapterKeyOfSection(doc, s) === String(chapterKey));
+}
+
+// Section « épinglée » par un clic sur une puce ou une entrée de menu :
+// elle reste la section affichée/active tant que la page courante est
+// dans son intervalle [startPage, début de la section suivante de même
+// niveau ou supérieur avec une page strictement plus grande). Au-delà,
+// le calcul normal par la page reprend. C'est ce qui fait « coller » le
+// clic quand deux sections partagent la même page (ex. GEN et GEN 1.0
+// commencent tous deux p. 35 de l'AIM).
+let pinnedSection = null; // { docId, key }
+function pinSection(docId, key) { pinnedSection = { docId, key: String(key) }; }
+function effectiveSection(doc, page) {
+  if (pinnedSection && pinnedSection.docId === doc.id) {
+    const pinned = doc.sections.find((s) => String(s.key) === String(pinnedSection.key));
+    if (pinned) {
+      const level = sectionLevel(pinned);
+      let end = Infinity;
+      for (const s of doc.sections) {
+        if (s.startPage > pinned.startPage && sectionLevel(s) <= level && s.startPage < end) end = s.startPage;
+      }
+      if (page >= pinned.startPage && page < end) return pinned;
+    }
+  }
+  return sectionForPage(doc, page);
 }
 
 // ---------------------------------------------------------------------------
@@ -220,9 +277,12 @@ async function renderCurrentPage() {
 
 function updateReaderChrome() {
   const meta = docMeta(state.currentDoc);
-  const section = sectionForPage(meta, state.currentPage);
+  const section = effectiveSection(meta, state.currentPage);
+  // Titre du lecteur : libellé complet partagé (chapitre + sous-section,
+  // ex. « GEN 1.0 — Renseignements généraux ») ; le 2e argument n'est
+  // qu'un repli pour une sous-section sans champ `chapter` explicite.
   $('readerTitle').textContent =
-    `${meta.title} — ${section.label} — Page ${state.currentPage} sur ${meta.totalPages}`;
+    `${meta.title} — ${fullSectionLabel(section, chapterKeyOfSection(meta, section))} — Page ${state.currentPage} sur ${meta.totalPages}`;
   $('pageCounter').textContent = `Page ${state.currentPage} sur ${meta.totalPages}`;
   $('ocrBanner').hidden = !meta.ocr;
   $('prevPageBtn').disabled = state.currentPage <= 1;
@@ -236,7 +296,19 @@ function updateReaderChrome() {
   document.querySelectorAll('.doc-card').forEach((el) => {
     el.classList.toggle('active', el.dataset.doc === state.currentDoc);
   });
+  // Puce active : dans la rangée chapitres, le chapitre de la section
+  // courante (ou le chapitre lui-même) ; dans la rangée sous-sections,
+  // la sous-section courante. Document simple : une seule rangée, la
+  // puce de la section courante, comme aujourd'hui.
+  const effChapterKey = sectionLevel(section) === 1
+    ? String(section.key) : chapterKeyOfSection(meta, section);
   document.querySelectorAll('#sectionChips .chip').forEach((el) => {
+    const inChapterRow = el.parentElement && el.parentElement.id === 'chapterChips';
+    el.classList.toggle('active', inChapterRow
+      ? el.dataset.section === effChapterKey
+      : el.dataset.section === String(section.key) && sectionLevel(section) === 2);
+  });
+  document.querySelectorAll('#sectionsMenu button').forEach((el) => {
     el.classList.toggle('active', el.dataset.section === String(section.key));
   });
 }
@@ -441,18 +513,42 @@ function buildDocCards() {
   }
 }
 
+function makeSectionChip(docId, s, extraClass, row) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'chip' + (extraClass ? ' ' + extraClass : '');
+  b.dataset.section = String(s.key);
+  b.textContent = s.label;
+  b.addEventListener('click', (e) => {
+    pinSection(docId, s.key); // le clic colle (voir effectiveSection)
+    openDocPage(docId, s.startPage);
+    e.currentTarget.blur();
+  });
+  row.appendChild(b);
+}
+
+// Deux rangées sobres : chapitres (niveau 1) puis sous-sections du
+// chapitre courant (niveau 2). Document sans chapitres : une seule
+// rangée, les mêmes puces qu'aujourd'hui. Chapitre sans sous-sections :
+// seule la rangée chapitres. La rangée 2 est reconstruite à chaque
+// changement de page (openDocPage), donc elle suit le feuilletage,
+// la recherche et les clics.
 function buildSectionChips(docId) {
   const doc = docMeta(docId);
-  const wrap = $('sectionChips');
-  wrap.innerHTML = '';
-  for (const s of numberedSections(doc)) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'chip';
-    b.dataset.section = String(s.key);
-    b.textContent = s.label;
-    b.addEventListener('click', (e) => { openDocPage(docId, s.startPage); e.currentTarget.blur(); });
-    wrap.appendChild(b);
+  const chapterRow = $('chapterChips');
+  const subRow = $('subChips');
+  chapterRow.innerHTML = '';
+  subRow.innerHTML = '';
+  const chaps = chapters(doc);
+  if (chaps.length) {
+    for (const c of chaps) makeSectionChip(docId, c, 'chapter-chip', chapterRow);
+    let chKey = chapterOfPage(doc, state.currentPage);
+    if (!chKey) chKey = chapterKeyOfSection(doc, effectiveSection(doc, state.currentPage));
+    if (chKey) {
+      for (const s of subsectionsOfChapter(doc, chKey)) makeSectionChip(docId, s, '', subRow);
+    }
+  } else {
+    for (const s of numberedSections(doc)) makeSectionChip(docId, s, '', subRow);
   }
 }
 
@@ -460,13 +556,25 @@ function buildSectionsMenu(docId) {
   const doc = docMeta(docId);
   const menu = $('sectionsMenu');
   menu.innerHTML = '';
+  const eff = effectiveSection(doc, state.currentPage);
   for (const s of doc.sections) {
+    const level = sectionLevel(s);
     const b = document.createElement('button');
     b.type = 'button';
-    b.innerHTML = `<span>${s.label}</span><span class="pg">p. ${s.startPage}</span>`;
+    b.dataset.section = String(s.key);
+    b.dataset.level = String(level);
+    // Chapitres en en-têtes (gras, cliquables), sous-sections indentées.
+    // Document simple : aucune classe, l'aspect d'aujourd'hui.
+    if (level === 1) b.className = 'menu-chapter';
+    else if (level === 2 && chapters(doc).length) b.className = 'menu-sub';
+    if (eff && String(eff.key) === String(s.key)) b.classList.add('active');
+    // Libellé complet partagé : une sous-section s'affiche avec son
+    // chapitre (« GEN 1.0 — ... ») ; chapitre et document simple inchangés.
+    b.innerHTML = `<span>${esc(fullSectionLabel(s, chapterKeyOfSection(doc, s)))}</span><span class="pg">p. ${s.startPage}</span>`;
     b.addEventListener('click', (e) => {
       menu.hidden = true;
       $('sectionsMenuBtn').setAttribute('aria-expanded', 'false');
+      pinSection(docId, s.key); // le clic colle (voir effectiveSection)
       openDocPage(docId, s.startPage);
       e.currentTarget.blur();
     });
@@ -1015,6 +1123,7 @@ window.__poh = {
   goToSection: (key) => {
     const doc = docMeta(state.currentDoc);
     const s = doc.sections.find((x) => String(x.key) === String(key));
+    if (s) pinSection(state.currentDoc, s.key);
     return openDocPage(state.currentDoc, s ? s.startPage : 1);
   },
   goToDoc: async (id) => {
@@ -1039,6 +1148,31 @@ window.__poh = {
   floatingNavInfo,
   layoutOverlapInfo,
   highlightInfo,
+  // Navigation à deux niveaux (v1.2.1) : état réel des deux rangées de
+  // puces, du menu et du titre, pour l'auto-test.
+  sectionInfo: () => JSON.stringify({
+    title: $('readerTitle').textContent,
+    page: state.currentPage,
+    effective: (() => { const d = docMeta(state.currentDoc); const s = d ? effectiveSection(d, state.currentPage) : null; return s ? String(s.key) : null; })(),
+    chapterChips: [...document.querySelectorAll('#chapterChips .chip')].map((el) => el.dataset.section),
+    subChips: [...document.querySelectorAll('#subChips .chip')].map((el) => el.dataset.section),
+    activeChapter: (() => { const el = document.querySelector('#chapterChips .chip.active'); return el ? el.dataset.section : null; })(),
+    activeSub: (() => { const el = document.querySelector('#subChips .chip.active'); return el ? el.dataset.section : null; })(),
+    menu: [...document.querySelectorAll('#sectionsMenu button')].map((b) => ({ key: b.dataset.section, level: b.dataset.level })),
+    menuActive: (() => { const el = document.querySelector('#sectionsMenu button.active'); return el ? el.dataset.section : null; })(),
+  }),
+  // Remplace les sections d'un document (auto-test : injecte un document
+  // à chapitres construit à la main — le fixture-3p.pdf est plat).
+  getSections: (docId) => JSON.stringify(docMeta(docId).sections),
+  setSections: (docId, sections) => {
+    const doc = docMeta(docId);
+    doc.sections = sections;
+    pinnedSection = null;
+    buildSectionChips(docId);
+    buildSectionsMenu(docId);
+    updateReaderChrome();
+    return sections.length;
+  },
   nonBlankPixels: () => nonBlankPixels(),
   convert: (kind, value) => convertValue(kind, value),
   calc: (expr) => evaluateExpression(expr),

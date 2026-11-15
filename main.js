@@ -361,6 +361,58 @@ async function runSelfTest(win) {
     `(() => { const wrap = document.querySelector('#docCards'); for (let i = 0; i < 6; i++) { const b = document.createElement('button'); b.type = 'button'; b.className = 'doc-card'; b.innerHTML = '<span class="doc-name">TEST ' + i + '</span><br><span class="doc-sub">Document de test pour le contrôle de débordement</span><br><span class="doc-pages">100 pages</span>'; wrap.appendChild(b); } return window.__poh.search('fuel').then(() => { const info = window.__poh.layoutOverlapInfo(); document.querySelectorAll('#docCards .doc-card').forEach((c) => { const t = (c.querySelector('.doc-name') || c.querySelector('.doc-title') || {}).textContent || ''; if (t.startsWith('TEST')) c.remove(); }); return info; }); })()`,
     (v) => { try { const o = JSON.parse(v); return o.overlap === false; } catch { return false; } });
 
+  // (e) Navigation à deux niveaux (v1.2.1) : le fixture-3p.pdf est plat,
+  // on injecte donc des sections à chapitres construites à la main sur
+  // le document déjà importé (GEN/RAC, 3 pages), puis on restaure les
+  // sections d'origine — les étapes suivantes repartent du fixture plat.
+  const CHAPTERED = [
+    { key: 'front', label: 'Début du document', startPage: 1, level: 0 },
+    { key: 'GEN', label: 'GEN — Généralités', startPage: 1, level: 1 },
+    { key: 'GEN 1.0', label: '1.0 — Renseignements généraux', startPage: 1, level: 2, chapter: 'GEN', chapterLabel: 'GEN — Généralités' },
+    { key: 'RAC', label: 'RAC — Règles de l\u2019air', startPage: 2, level: 1 },
+    { key: 'GEN 2.0', label: '2.0 — Définitions', startPage: 2, level: 2, chapter: 'GEN', chapterLabel: 'GEN — Généralités' },
+    { key: 'RAC 3.0', label: '3.0 — Règles générales', startPage: 2, level: 2, chapter: 'RAC', chapterLabel: 'RAC — Règles de l\u2019air' },
+    { key: 'RAC 4.0', label: '4.0 — Altitudes', startPage: 3, level: 2, chapter: 'RAC', chapterLabel: 'RAC — Règles de l\u2019air' },
+  ];
+  const CHAPTERED_JSON = JSON.stringify(CHAPTERED);
+
+  await step('chapitres : injection GEN/RAC — 2 rangées (chapitres GEN,RAC ; sous-sections GEN 1.0,GEN 2.0), titre complet',
+    `(async () => { const id = document.querySelector('.doc-card').dataset.doc; window.__savedSections = window.__poh.getSections(id); window.__poh.setSections(id, ${CHAPTERED_JSON}); await window.__poh.goToDoc(id); return window.__poh.sectionInfo(); })()`,
+    (v) => { try { const o = JSON.parse(v); return o.page === 1 && o.effective === 'GEN 1.0' && JSON.stringify(o.chapterChips) === '["GEN","RAC"]' && JSON.stringify(o.subChips) === '["GEN 1.0","GEN 2.0"]' && o.activeChapter === 'GEN' && o.activeSub === 'GEN 1.0' && o.title.includes('GEN 1.0 — Renseignements généraux'); } catch { return false; } });
+
+  await step('chapitres : clic puce chapitre GEN (même page que GEN 1.0) -> chapitre affiché, pas la sous-section',
+    `(async () => { document.querySelector('#chapterChips [data-section="GEN"]').click(); await new Promise(r => setTimeout(r, 800)); return window.__poh.sectionInfo(); })()`,
+    (v) => { try { const o = JSON.parse(v); return o.page === 1 && o.effective === 'GEN' && o.activeChapter === 'GEN' && o.activeSub === null && o.title.includes('GEN — Généralités'); } catch { return false; } });
+
+  await step('chapitres : clic puce sous-section GEN 1.0 (même page) -> saut ET la puce reste sur GEN 1.0',
+    `(async () => { document.querySelector('#subChips [data-section="GEN 1.0"]').click(); await new Promise(r => setTimeout(r, 800)); return window.__poh.sectionInfo(); })()`,
+    (v) => { try { const o = JSON.parse(v); return o.page === 1 && o.effective === 'GEN 1.0' && o.activeChapter === 'GEN' && o.activeSub === 'GEN 1.0' && o.title.includes('GEN 1.0 — Renseignements généraux'); } catch { return false; } });
+
+  await step('chapitres : clic puce chapitre RAC -> p. 2, rangée 2 = sous-sections RAC, titre chapitre',
+    `(async () => { document.querySelector('#chapterChips [data-section="RAC"]').click(); await new Promise(r => setTimeout(r, 800)); return window.__poh.sectionInfo(); })()`,
+    (v) => { try { const o = JSON.parse(v); return o.page === 2 && o.effective === 'RAC' && JSON.stringify(o.subChips) === '["RAC 3.0","RAC 4.0"]' && o.activeChapter === 'RAC' && o.activeSub === null && o.title.includes('RAC — Règles de l\u2019air'); } catch { return false; } });
+
+  await step('chapitres : menu Sections — chapitres en en-têtes (niveau 1), sous-sections indentées (niveau 2), clic RAC 3.0',
+    `(async () => { document.querySelector('#sectionsMenuBtn').click(); await new Promise(r => setTimeout(r, 300)); const avant = window.__poh.sectionInfo(); document.querySelector('#sectionsMenu [data-section="RAC 3.0"]').click(); await new Promise(r => setTimeout(r, 800)); return avant + ' || ' + window.__poh.sectionInfo(); })()`,
+    (v) => { try { const [a, b] = v.split(' || '); const o = JSON.parse(a); const p = JSON.parse(b); const menuOk = JSON.stringify(o.menu.map((m) => m.key)) === '["front","GEN","GEN 1.0","RAC","GEN 2.0","RAC 3.0","RAC 4.0"]' && JSON.stringify(o.menu.map((m) => m.level)) === '["0","1","2","1","2","2","2"]' && o.menuActive === 'RAC'; return menuOk && p.page === 2 && p.effective === 'RAC 3.0' && p.activeSub === 'RAC 3.0' && p.title.includes('RAC 3.0 — Règles générales'); } catch { return false; } });
+
+  await step('chapitres : feuilletage hors de l\u2019intervalle épinglé -> calcul normal, rangée 2 suit le chapitre (p. 3 RAC 4.0, p. 1 GEN 1.0)',
+    `(async () => { await window.__poh.goToPage(3); const a = window.__poh.sectionInfo(); await window.__poh.goToPage(1); const b = window.__poh.sectionInfo(); return a + ' || ' + b; })()`,
+    (v) => { try { const [a, b] = v.split(' || '); const o = JSON.parse(a); const p = JSON.parse(b); return o.page === 3 && o.effective === 'RAC 4.0' && JSON.stringify(o.subChips) === '["RAC 3.0","RAC 4.0"]' && o.activeSub === 'RAC 4.0' && p.page === 1 && p.effective === 'GEN 1.0' && JSON.stringify(p.subChips) === '["GEN 1.0","GEN 2.0"]' && p.activeChapter === 'GEN' && p.activeSub === 'GEN 1.0'; } catch { return false; } });
+
+  await step('chapitres : restauration des sections plates du fixture (1 rangée, 3 puces, comme avant)',
+    `(async () => { const id = document.querySelector('.doc-card').dataset.doc; window.__poh.setSections(id, JSON.parse(window.__savedSections)); await window.__poh.goToDoc(id); return window.__poh.sectionInfo(); })()`,
+    (v) => { try { const o = JSON.parse(v); return o.page === 1 && o.chapterChips.length === 0 && o.subChips.length === 3 && o.effective === '1' && o.title.startsWith('FIXTURE-3P'); } catch { return false; } });
+
+  // Libellé complet (v1.2.1) : le même libellé « GEN 1.0 — ... » doit
+  // sortir de la recherche (searchDocs) et des citations IA
+  // (retrieveContext, qui reprend le sectionLabel des résultats) —
+  // vérifié sur des données synthétiques à chapitres, sans toucher au
+  // fixture (dont l'index référence les clés plates '1'/'2'/'3').
+  await step('libellé complet : searchDocs et retrieveContext renvoient « GEN 1.0 — Renseignements généraux »',
+    `(async () => { const search = await import('app://renderer/search.js'); const retrieve = await import('app://renderer/ai-retrieve.js'); const docs = [{ doc_id: 'aim', title: 'AIM', pages: [{ pdf_page: 35, printed_label: null, section: 'GEN 1.0', text: 'Renseignements généraux sur le carburant fuel.' }] }]; const meta = { aim: { title: 'AIM', sections: ${CHAPTERED_JSON} } }; const r = search.searchDocs(docs, meta, 'fuel', { groups: [] }, { scope: 'all' }); const ctx = retrieve.retrieveContext(docs, meta, { groups: [] }, 'renseignements carburant'); return 'recherche=' + (r.results[0] ? r.results[0].sectionLabel : 'aucun') + ' ia=' + (ctx.pages[0] ? ctx.pages[0].sectionLabel : 'aucun'); })()`,
+    (v) => v === 'recherche=GEN 1.0 — Renseignements généraux ia=GEN 1.0 — Renseignements généraux');
+
   // Supprimer = supprimer : le fixture supprimé, rechargement, retour à
   // l'état vide (0 document). Profil de test frais, jeté après.
   await step('supprimer le fixture : suppression enregistrée, rechargement',

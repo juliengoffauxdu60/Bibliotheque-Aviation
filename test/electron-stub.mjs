@@ -27,6 +27,13 @@ export const ipcMain = {
   handle: (channel, fn) => { handlers.set(channel, fn); },
 };
 
+// main-import.js importe aussi `dialog` (sélecteur de fichier) : le faux
+// refuse l'ouverture (annulé) — le test du refresh ne l'appelle jamais,
+// mais l'import du module exige que le nom soit exporté.
+export const dialog = {
+  showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+};
+
 export const safeStorage = {
   isEncryptionAvailable: () => true,
   encryptString: (s) => {

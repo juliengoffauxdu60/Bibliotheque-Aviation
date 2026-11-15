@@ -1,5 +1,19 @@
 # Rapport de vérification — Bibliothèque Aviation (desktop)
 
+> Note v1.2.1 (15 nov. 2026) : sections à deux niveaux (chapitres +
+> sous-sections, ex. « RAC 1.0 »), mise à niveau automatique des anciens
+> imports, bouton « Tester » IA réparé (28 s + nouvel essai). Suites Node :
+> search 25, import 83 (97 avec les PDF GEN/RAC dans /tmp), ai 122,
+> highlight 32, highlight-vertical 9, layered 44, refresh 31 — total 360,
+> 0 échec. Auto-test Electron : 48/48. Vérifié sur le vrai AIM de Julien
+> (569 p., local seulement, jamais dans le dépôt) : détection en couches
+> source outline, 87 sections, 11 chapitres (GEN@35, AGA@91, COM@127,
+> MET@169, RAC@237, NAT@399, SAR@415, MAP@429, LRA@441, AIR@467, ATP@525),
+> GEN 5.0@66, AGA 9.0@118, RAC 1.0@237 ; passe titres 9.0 → p.118
+> (était p.14). Limites connues du repli titres (documentées dans les
+> tests) : 5.0 → p.98, 7.0 → p.89, 10.0 → p.166 — les signets donnent
+> les bonnes pages.
+>
 > Note v1.2.0 (14 nov. 2026), mise à jour 15 nov. 2026 : ce rapport
 > documente la v1.1.3, livrée AVEC les 4 documents fournis (172N, 172R,
 > 150, SOP C150 — 1028 pages). Depuis la v1.2.0, l'appli est livrée SANS
