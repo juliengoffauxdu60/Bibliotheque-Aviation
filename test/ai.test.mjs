@@ -193,5 +193,108 @@ check('contexte terme absent : 0 page', ctxRien.pages.length, 0);
 const ctxVide = retrieveContext(docs, meta, synonyms, 'Quelle est la ?');
 check('contexte question sans terme : 0 page', ctxVide.pages.length, 0);
 
+// 10. Réglages stockés (main-ai.js) avec Electron simulé : clés par
+// fournisseur, clé masquée sans déchiffrement, migration v1 -> v2.
+// Le faux Electron (test/electron-stub.mjs) compte les appels à
+// safeStorage.decryptString : l'affichage (ai:get-settings) ne doit
+// JAMAIS en faire — l'invite du trousseau macOS ne doit apparaître qu'à
+// l'usage réel de la clé (ai:ask, ai:test).
+import { register } from 'node:module';
+register('./electron-stub.mjs', import.meta.url);
+const { registerAiHandlers } = await import('../main-ai.js');
+const electronStub = await import('./electron-stub.mjs');
+registerAiHandlers();
+const ipcHandlers = electronStub.handlers;
+const settingsFile = path.join(electronStub.userDataDir, 'ai-settings.json');
+const callIpc = (channel, ...args) => ipcHandlers.get(channel)(null, ...args);
+const readStoredFile = () => JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+const decryptStored = (value) => electronStub.safeStorage.decryptString(Buffer.from(value, 'base64'));
+const FAUSSE_CLE_GEMINI = 'sk-fausse-cle-gemini-AAAA1111';
+const FAUSSE_CLE_CLAUDE = 'sk-fausse-cle-claude-BBBB2222';
+const CONTEXTE_TEST = [{ docTitle: 'POH Cessna 172N', sectionLabel: 'Section 5 — Performances', pageLabel: 'p. 5-12', excerpt: 'La vitesse de décrochage est de 48 kt.' }];
+const realFetchForSection10 = globalThis.fetch;
+
+// 10a. Migration v1 : fichier plat, clé chiffrée, jamais déchiffrée à l'affichage.
+fs.writeFileSync(settingsFile, JSON.stringify({
+  provider: 'gemini', model: 'gemini-3.8-flash',
+  endpoint: PROVIDERS.gemini.defaultEndpoint,
+  keyMethod: 'safeStorage',
+  keyValue: electronStub.safeStorage.encryptString(FAUSSE_CLE_GEMINI).toString('base64'),
+}, null, 2), 'utf8');
+let decrypts = electronStub.safeStorageCalls.decrypt;
+let res = await callIpc('ai:get-settings');
+check('migration v1 : lecture OK sans déchiffrement', res.ok === true && electronStub.safeStorageCalls.decrypt === decrypts, true);
+check('migration v1 : fournisseur + modèle lus', [res.settings.provider, res.settings.model], ['gemini', 'gemini-3.8-flash']);
+check('migration v1 : clé présente, masquée générique (derniers caractères inconnus sans déchiffrer)', [res.settings.hasKey, res.settings.maskedKey], [true, '••••']);
+check('migration v1 : clé du fournisseur migrée dans la liste', res.settings.providers.find((p) => p.id === 'gemini').hasKey, true);
+res = await callIpc('ai:save-settings', { provider: 'gemini', model: 'gemini-3.8-flash', endpoint: PROVIDERS.gemini.defaultEndpoint, key: '' });
+check('migration v1 : sauvegarde OK', res.ok, true);
+const apresMigration = readStoredFile();
+check('migration v1 : fichier réécrit en v2 (plus de clé plate)', 'keyValue' in apresMigration, false);
+check('migration v1 : clé conservée sous le fournisseur', decryptStored(apresMigration.providers.gemini.keyValue), FAUSSE_CLE_GEMINI);
+check('migration v1 : modèle/endpoint conservés', [apresMigration.providers.gemini.model, apresMigration.providers.gemini.endpoint], ['gemini-3.8-flash', PROVIDERS.gemini.defaultEndpoint]);
+decrypts = electronStub.safeStorageCalls.decrypt;
+res = await callIpc('ai:get-settings');
+check('affichage : get-settings ne déchiffre jamais', electronStub.safeStorageCalls.decrypt, decrypts);
+check('affichage : clé masquée sans déchiffrement', res.settings.maskedKey, '••••');
+
+// 10b. Usage réel : ai:test déchiffre (attendu) et la clé masquée est recalculée.
+globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: 'OK' }] } }] }) });
+decrypts = electronStub.safeStorageCalls.decrypt;
+res = await callIpc('ai:test');
+check('usage réel : ai:test réussit', res.ok, true);
+check('usage réel : ai:test a déchiffré exactement une fois', electronStub.safeStorageCalls.decrypt - decrypts, 1);
+globalThis.fetch = realFetchForSection10;
+res = await callIpc('ai:get-settings');
+check('usage réel : clé masquée recalculée après usage (4 derniers caractères)', res.settings.maskedKey, '••••1111');
+
+// 10c. Clés par fournisseur : sauver A pour gemini, B pour claude, revenir sur gemini.
+await callIpc('ai:save-settings', { provider: 'gemini', model: 'gemini-3.8-flash', endpoint: PROVIDERS.gemini.defaultEndpoint, key: FAUSSE_CLE_GEMINI });
+await callIpc('ai:save-settings', { provider: 'claude', model: 'claude-sonnet-4-5', endpoint: PROVIDERS.claude.defaultEndpoint, key: FAUSSE_CLE_CLAUDE });
+res = await callIpc('ai:save-settings', { provider: 'gemini', model: 'gemini-3.8-flash', endpoint: PROVIDERS.gemini.defaultEndpoint, key: '' });
+check('clés par fournisseur : retour sur gemini, clé A restaurée', [res.settings.provider, res.settings.maskedKey], ['gemini', '••••1111']);
+const stocke = readStoredFile();
+check('clés par fournisseur : clé gemini intacte dans le fichier', decryptStored(stocke.providers.gemini.keyValue), FAUSSE_CLE_GEMINI);
+check('clés par fournisseur : clé claude intacte dans le fichier', decryptStored(stocke.providers.claude.keyValue), FAUSSE_CLE_CLAUDE);
+check('clés par fournisseur : aucune clé en clair dans le fichier',
+  fs.readFileSync(settingsFile, 'utf8').includes(FAUSSE_CLE_GEMINI) || fs.readFileSync(settingsFile, 'utf8').includes(FAUSSE_CLE_CLAUDE), false);
+check('clés par fournisseur : clé masquée stockée à la sauvegarde', stocke.providers.claude.maskedKey, '••••2222');
+
+// 10d. ai:ask envoie la clé DU fournisseur courant, jamais celle d'un autre.
+let seenHeaders = null;
+globalThis.fetch = async (_url, options) => {
+  seenHeaders = options.headers;
+  return { ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: 'OK' }] } }] }) };
+};
+res = await callIpc('ai:ask', { question: 'Test ?', context: CONTEXTE_TEST });
+check('ask gemini : la clé gemini est envoyée (pas celle de claude)', seenHeaders['x-goog-api-key'], FAUSSE_CLE_GEMINI);
+await callIpc('ai:save-settings', { provider: 'claude', model: 'claude-sonnet-4-5', endpoint: PROVIDERS.claude.defaultEndpoint, key: '' });
+globalThis.fetch = async (_url, options) => {
+  seenHeaders = options.headers;
+  return { ok: true, status: 200, json: async () => ({ content: [{ type: 'text', text: 'OK' }] }) };
+};
+res = await callIpc('ai:ask', { question: 'Test ?', context: CONTEXTE_TEST });
+check('ask claude : la clé claude est envoyée (pas celle de gemini)', seenHeaders['x-api-key'], FAUSSE_CLE_CLAUDE);
+globalThis.fetch = realFetchForSection10;
+
+// 10e. ai:clear-key n'efface que la clé du fournisseur courant.
+res = await callIpc('ai:clear-key');
+check('clear-key : efface la clé du fournisseur courant', [res.ok, res.settings.hasKey], [true, false]);
+const apresClear = readStoredFile();
+check('clear-key : clé claude effacée', Boolean(apresClear.providers.claude.keyValue), false);
+check('clear-key : clé gemini toujours là', decryptStored(apresClear.providers.gemini.keyValue), FAUSSE_CLE_GEMINI);
+
+// 10f. Gardes : refus et défauts (comportement inchangé).
+res = await callIpc('ai:save-settings', { provider: 'gemini', model: '', endpoint: '', key: 'court' });
+check('sauvegarde : clé trop courte refusée', res.ok, false);
+res = await callIpc('ai:save-settings', { provider: 'inconnu', model: '', endpoint: '', key: '' });
+check('sauvegarde : fournisseur inconnu refusé', res.ok, false);
+await callIpc('ai:save-settings', { provider: 'gemini', model: '', endpoint: '', key: '' });
+res = await callIpc('ai:get-settings');
+check('modèle/endpoint vides : défauts du fournisseur affichés', [res.settings.model, res.settings.endpoint], ['gemini-3.8-flash', PROVIDERS.gemini.defaultEndpoint]);
+
+// Nettoyage du dossier temporaire du faux Electron.
+fs.rmSync(electronStub.userDataDir, { recursive: true, force: true });
+
 console.log(failures === 0 ? '\nTOUS LES TESTS PASSENT' : `\n${failures} ÉCHEC(S)`);
 process.exit(failures === 0 ? 0 : 1);

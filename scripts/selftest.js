@@ -3,6 +3,7 @@
 // Usage : npm run selftest   (ou : xvfb-run -a npm run selftest)
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -14,7 +15,7 @@ const shotsDir = path.join(outDir, 'shots');
 fs.mkdirSync(shotsDir, { recursive: true });
 
 const electronBin = path.join(root, '..', 'node_modules', '.bin', 'electron');
-const freshProfile = fs.mkdtempSync(path.join('/tmp', 'poh-selftest-'));
+const freshProfile = fs.mkdtempSync(path.join(os.tmpdir(), 'poh-selftest-'));
 const child = spawn(electronBin, ['.', '--user-data-dir=' + freshProfile], {
   cwd: path.join(root, '..'),
   env: {

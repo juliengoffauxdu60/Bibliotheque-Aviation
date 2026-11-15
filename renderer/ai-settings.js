@@ -25,16 +25,22 @@ function providerById(id) {
 function fillProviderDefaults(id, { force = false } = {}) {
   const def = providerById(id);
   if (!def) return;
-  // On ne remplit que si le champ est vide, ou quand l'utilisateur vient de
-  // changer de fournisseur (force) : on n'écrase pas une valeur qu'il a
-  // tapée lui-même en rechargeant la page.
-  if (force || !$('aiModel').value.trim()) $('aiModel').value = def.defaultModel;
-  if (force || !$('aiEndpoint').value.trim()) $('aiEndpoint').value = def.defaultEndpoint;
+  // Valeurs propres à CE fournisseur : celles qu'il a enregistrées, sinon
+  // ses défauts. On ne remplit que si le champ est vide, ou quand
+  // l'utilisateur vient de changer de fournisseur (force) : on n'écrase pas
+  // une valeur qu'il a tapée lui-même en rechargeant la page.
+  if (force || !$('aiModel').value.trim()) $('aiModel').value = def.model || def.defaultModel;
+  if (force || !$('aiEndpoint').value.trim()) $('aiEndpoint').value = def.endpoint || def.defaultEndpoint;
   $('aiProviderHelp').textContent = def.keyHelp;
   $('aiKey').disabled = false;
   $('aiKey').placeholder = def.needsKey
     ? 'Collez votre clé ici'
     : 'Clé facultative (laisser vide pour une IA locale sans clé)';
+  // L'état de la clé affiché est celui DE CE fournisseur : changer de
+  // fournisseur ne montre jamais la clé d'un autre.
+  $('aiKeyState').textContent = def.hasKey
+    ? `Clé enregistrée : ${def.maskedKey} — laissez le champ vide pour la garder.`
+    : 'Aucune clé enregistrée.';
 }
 
 async function refresh() {
@@ -63,9 +69,8 @@ async function refresh() {
   $('aiEndpoint').value = current.endpoint || '';
   fillProviderDefaults(select.value);
   $('aiKey').value = '';
-  $('aiKeyState').textContent = current.hasKey
-    ? `Clé enregistrée : ${current.maskedKey} — laissez le champ vide pour la garder.`
-    : 'Aucune clé enregistrée.';
+  // L'état de la clé est affiché par fillProviderDefaults (celui du
+  // fournisseur sélectionné).
   const note = $('aiEncryptionNote');
   if (!current.encryptionAvailable) {
     note.hidden = false;
@@ -96,6 +101,7 @@ function bind() {
       return;
     }
     current = res.settings;
+    providers = res.settings.providers || [];
     $('aiKey').value = '';
     $('aiKeyState').textContent = current.hasKey
       ? `Clé enregistrée : ${current.maskedKey} — laissez le champ vide pour la garder.`
@@ -128,6 +134,7 @@ function bind() {
       return;
     }
     current = res.settings;
+    providers = res.settings.providers || [];
     $('aiKeyState').textContent = 'Aucune clé enregistrée.';
     setStatus('Clé effacée.');
     e.currentTarget.blur();

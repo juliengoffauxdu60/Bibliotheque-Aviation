@@ -242,6 +242,21 @@ async function runSelfTest(win) {
     `window.__poh.setZoom(100).then(() => { const z = JSON.parse(window.__poh.zoomInfo()); return 'pct=' + z.zoomPct + ' w=' + z.canvasCssWidth + ' base=' + window.__zoomBase + ' out=' + z.zoomOutDisabled + ' in=' + z.zoomInDisabled; })`,
     (v) => { const m = /pct=(\d+) w=(\d+) base=(\d+) out=(\w+) in=(\w+)/.exec(v); return !!m && +m[1] === 100 && +m[2] === +m[3] && m[4] === 'false' && m[5] === 'false'; });
 
+  // Surlignage (v1.1.3) : PDF à vrai texte (172R) — le terme du résultat
+  // courant est surligné sur toutes ses occurrences de la page.
+  await step('surlignage : recherche « fuel », résultat 172R — occurrences surlignées',
+    `window.__poh.search('fuel').then(r => { const i = r.results.findIndex(x => x.docId === 'c172r'); return window.__poh.openResult(i).then(() => window.__poh.highlightInfo()); })`,
+    (v) => { try { const o = JSON.parse(v); return o.doc === 'c172r' && o.term === 'fuel' && o.rects > 0; } catch { return false; } });
+  await shot('07-surlignage-fuel');
+
+  await step('surlignage : zoom 150 % conserve les rects sur la même page',
+    `window.__poh.setZoom(150).then(() => window.__poh.highlightInfo())`,
+    (v) => { try { const o = JSON.parse(v); return o.doc === 'c172r' && o.term === 'fuel' && o.rects > 0 && o.aligned === true; } catch { return false; } });
+
+  await step('surlignage : retour à 100 % puis recherche sans résultat — plus aucun rect',
+    `window.__poh.setZoom(100).then(() => window.__poh.search('zzzqqqintrouvable')).then(() => window.__poh.highlightInfo())`,
+    (v) => { try { const o = JSON.parse(v); return o.rects === 0 && o.term === null; } catch { return false; } });
+
   await step('mode « Page entière » : page visible sans défilement',
     `window.__poh.setMode('fit').then(() => window.__poh.centeringInfo())`,
     (v) => { try { const o = JSON.parse(v); return o.mode === 'fit' && o.fitsWithoutScroll === true; } catch { return false; } });
@@ -299,20 +314,15 @@ async function runSelfTest(win) {
     `(() => { const wrap = document.querySelector('#docCards'); for (let i = 0; i < 6; i++) { const b = document.createElement('button'); b.type = 'button'; b.className = 'doc-card'; b.innerHTML = '<span class="doc-name">TEST ' + i + '</span><br><span class="doc-sub">Document de test pour le contrôle de débordement</span><br><span class="doc-pages">100 pages</span>'; wrap.appendChild(b); } return window.__poh.search('fuel').then(() => { const info = window.__poh.layoutOverlapInfo(); document.querySelectorAll('#docCards .doc-card').forEach((c) => { if ((c.querySelector('.doc-name') || {}).textContent.startsWith('TEST')) c.remove(); }); return info; }); })()`,
     (v) => { try { const o = JSON.parse(v); return o.overlap === false; } catch { return false; } });
 
-  // Masquer un document fourni (14 nov.) : 172R masqué, rechargement,
-  // 3 documents restants, carte 172R absente ; puis restauration (4 docs).
-  await step('masquer 172R : enregistré dans la liste des masqués',
-    `window.pohDesktop.import.hideDoc('c172r').then(r => window.pohDesktop.import.hiddenList().then(l => { const s = 'ok=' + r.ok + ' cachés=' + l.map(h => h.id).join(','); window.location.reload(); return s; }))`,
-    (v) => v === 'ok=true cachés=c172r');
-  await step('masquer 172R : après rechargement, 3 documents, carte 172R absente',
+  // Supprimer = supprimer (14 nov., v1.1.3) : 172R supprimé, rechargement,
+  // 3 documents restants, carte 172R absente. Profil de test frais, jeté
+  // après : aucune restauration nécessaire.
+  await step('supprimer 172R : enregistré dans la liste des supprimés',
+    `window.pohDesktop.import.deleteDoc('c172r').then(r => window.pohDesktop.import.deletedList().then(l => { const s = 'ok=' + r.ok + ' supprimés=' + l.map(h => h.id).join(','); window.location.reload(); return s; }))`,
+    (v) => v === 'ok=true supprimés=c172r');
+  await step('supprimer 172R : après rechargement, 3 documents, carte 172R absente',
     `new Promise((resolve) => { const t = setInterval(() => { if (window.__poh && window.__poh.ready) { clearInterval(t); window.__poh.ready().then(() => resolve('docs=' + window.__poh.state().docsLoaded + ' carte172r=' + (document.querySelector('.doc-card[data-doc="c172r"]') ? 'présente' : 'absente'))); } }, 200); setTimeout(() => { clearInterval(t); resolve('timeout'); }, 15000); })`,
     (v) => v === 'docs=3 carte172r=absente');
-  await step('restaurer 172R : 4 documents de nouveau',
-    `window.pohDesktop.import.unhideDoc('c172r').then(r => { window.location.reload(); return 'ok=' + r.ok; })`,
-    (v) => v === 'ok=true');
-  await step('restaurer 172R : après rechargement, 4 documents',
-    `new Promise((resolve) => { const t = setInterval(() => { if (window.__poh && window.__poh.ready) { clearInterval(t); window.__poh.ready().then(() => resolve('docs=' + window.__poh.state().docsLoaded)); } }, 200); setTimeout(() => { clearInterval(t); resolve('timeout'); }, 15000); })`,
-    (v) => v === 'docs=4');
 
   await shot('05-sop-page-1');
   return out;

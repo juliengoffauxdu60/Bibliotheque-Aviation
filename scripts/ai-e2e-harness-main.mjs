@@ -13,6 +13,12 @@ const ROOT = process.env.POH_AI_E2E_ROOT;
 const OUT = process.env.POH_AI_E2E_OUT;
 const MOCK = process.env.POH_AI_E2E_MOCK;
 const FAKE_KEY = 'sk-fausse-cle-1234';
+// Une fausse clé DISTINCTE par fournisseur : le harnais prouve ainsi que
+// les clés ne se mélangent pas d'un fournisseur à l'autre (clés par
+// fournisseur — une clé vide à la sauvegarde garde la clé DU fournisseur,
+// jamais celle d'un autre).
+const FAKE_KEY_GEMINI = 'sk-fausse-cle-gemini-5678';
+const FAKE_KEY_CLAUDE = 'sk-fausse-cle-claude-9012';
 const QUESTION = 'Quelle est la vitesse de décrochage du 172N ?';
 
 protocol.registerSchemesAsPrivileged([{
@@ -105,12 +111,29 @@ async function runAll() {
   step(5, 'tests de connexion custom/gemini/claude');
   let t = await js(`window.pohDesktop.ai.test()`);
   check('test connexion custom (faux serveur)', t.ok && String(t.answer).includes('Réponse du faux serveur'), JSON.stringify(t).slice(0, 140));
-  await js(`window.pohDesktop.ai.saveSettings({provider:'gemini', model:'modele-factice', endpoint: ${JSON.stringify(MOCK + '/v1beta/models/{model}:generateContent')}, key:''})`);
+  // Chaque fournisseur a SA propre clé : une sauvegarde avec clé vide ne
+  // reprend plus la clé d'un autre fournisseur (ancien défaut).
+  await js(`window.pohDesktop.ai.saveSettings({provider:'gemini', model:'modele-factice', endpoint: ${JSON.stringify(MOCK + '/v1beta/models/{model}:generateContent')}, key: ${JSON.stringify(FAKE_KEY_GEMINI)}})`);
   t = await js(`window.pohDesktop.ai.test()`);
   check('test connexion gemini (faux serveur, forme Gemini)', t.ok && String(t.answer).includes('Réponse du faux serveur'), JSON.stringify(t).slice(0, 140));
-  await js(`window.pohDesktop.ai.saveSettings({provider:'claude', model:'modele-factice', endpoint: ${JSON.stringify(MOCK + '/v1/messages')}, key:''})`);
+  await js(`window.pohDesktop.ai.saveSettings({provider:'claude', model:'modele-factice', endpoint: ${JSON.stringify(MOCK + '/v1/messages')}, key: ${JSON.stringify(FAKE_KEY_CLAUDE)}})`);
   t = await js(`window.pohDesktop.ai.test()`);
   check('test connexion claude (faux serveur, forme Claude)', t.ok && String(t.answer).includes('Réponse du faux serveur'), JSON.stringify(t).slice(0, 140));
+
+  // 5b. Clés par fournisseur : revenir sur un fournisseur restaure SA clé.
+  step('5b', 'clés par fournisseur');
+  await js(`window.pohDesktop.ai.saveSettings({provider:'custom', model:'modele-factice', endpoint: ${JSON.stringify(MOCK + '/v1/chat/completions')}, key:''})`);
+  let g = await js(`window.pohDesktop.ai.getSettings()`);
+  check('clés par fournisseur : la clé custom est toujours là après gemini/claude',
+    g.settings.maskedKey.includes('••••1234'), g.settings.maskedKey);
+  await js(`window.pohDesktop.ai.saveSettings({provider:'gemini', model:'modele-factice', endpoint: ${JSON.stringify(MOCK + '/v1beta/models/{model}:generateContent')}, key:''})`);
+  g = await js(`window.pohDesktop.ai.getSettings()`);
+  check('clés par fournisseur : retour sur gemini, sa propre clé',
+    g.settings.maskedKey.includes('••••5678'), g.settings.maskedKey);
+  await js(`window.pohDesktop.ai.saveSettings({provider:'claude', model:'modele-factice', endpoint: ${JSON.stringify(MOCK + '/v1/messages')}, key:''})`);
+  g = await js(`window.pohDesktop.ai.getSettings()`);
+  check('clés par fournisseur : retour sur claude, sa propre clé',
+    g.settings.maskedKey.includes('••••9012'), g.settings.maskedKey);
 
   // 6. Ouvrir la fenêtre Réglages depuis le rendu (ai:open-settings).
   step(6, 'ouvrir la fenêtre Réglages');
@@ -125,18 +148,22 @@ async function runAll() {
 
   // 7. Flux question : d'abord le serveur coupé (point fermé).
   step(7, 'question, serveur coupé');
-  await js(`window.pohDesktop.ai.saveSettings({provider: ${JSON.stringify(askProvider)}, model:'modele-factice', endpoint: ${JSON.stringify(MOCK + '/v1/chat/completions')}, key:''})`);
+  // Le fournisseur de la question a SA propre clé (même « local », dont la
+  // clé est facultative) : le contrôle final du serveur factice prouve
+  // ainsi que la clé stockée a bien été relue et envoyée, en ligne comme
+  // hors réseau.
+  await js(`window.pohDesktop.ai.saveSettings({provider: ${JSON.stringify(askProvider)}, model:'modele-factice', endpoint: ${JSON.stringify(MOCK + '/v1/chat/completions')}, key: ${JSON.stringify(FAKE_KEY)}})`);
   await win.loadURL('app://e2e/ai-e2e-ask.html');
   await waitFor(`typeof window.__pohAi !== 'undefined'`);
   await waitFor(`window.__pohAi.ready().then(() => true)`);
-  await js(`window.pohDesktop.ai.saveSettings({provider: ${JSON.stringify(askProvider)}, model:'modele-factice', endpoint:'http://127.0.0.1:1/v1/chat/completions', key:''})`);
+  await js(`window.pohDesktop.ai.saveSettings({provider: ${JSON.stringify(askProvider)}, model:'modele-factice', endpoint:'http://127.0.0.1:1/v1/chat/completions', key: ${JSON.stringify(FAKE_KEY)}})`);
   await js(`window.__pohAi.ask(${JSON.stringify(QUESTION)})`);
   answer = await js(`window.__pohAi.answerText()`);
   check('serveur coupé : message clair, sans jargon', answer.includes('Impossible de joindre'), answer.slice(0, 180));
 
   // 8. Flux question : le faux serveur répond, extraits envoyés, sources listées.
   step(8, 'question, faux serveur');
-  await js(`window.pohDesktop.ai.saveSettings({provider: ${JSON.stringify(askProvider)}, model:'modele-factice', endpoint: ${JSON.stringify(MOCK + '/v1/chat/completions')}, key:''})`);
+  await js(`window.pohDesktop.ai.saveSettings({provider: ${JSON.stringify(askProvider)}, model:'modele-factice', endpoint: ${JSON.stringify(MOCK + '/v1/chat/completions')}, key: ${JSON.stringify(FAKE_KEY)}})`);
   await js(`window.__pohAi.ask(${JSON.stringify(QUESTION)})`);
   answer = await js(`window.__pohAi.answerText()`);
   const m = answer.match(/Extraits reçus : (\d+)/);
@@ -169,8 +196,16 @@ async function runAll() {
   st = await js(`window.__pohAiSettings.state()`);
   check('clé effacée : la page indique aucune clé', st.keyState.includes('Aucune clé enregistrée'), st.keyState);
   let keyGone = false;
-  try { keyGone = !JSON.parse(fs.readFileSync(settingsFile, 'utf8') || '{}').keyValue; } catch { keyGone = false; }
-  check('clé effacée : le fichier ne contient plus de clé', keyGone, 'fichier=' + settingsFile);
+  try {
+    const parsed = JSON.parse(fs.readFileSync(settingsFile, 'utf8') || '{}');
+    const entries = parsed.providers || {};
+    // La clé effacée à l'étape 10 est celle du fournisseur courant
+    // (askProvider) ; les autres fournisseurs gardent la leur — on ne
+    // vérifie donc que le fournisseur effacé (et openai, sans clé).
+    keyGone = !(entries[askProvider] && entries[askProvider].keyValue)
+      && !(entries.openai && entries.openai.keyValue);
+  } catch { keyGone = false; }
+  check('clé effacée : le fichier ne contient plus la clé du fournisseur effacé', keyGone, 'fichier=' + settingsFile);
 }
 
 app.whenReady().then(async () => {

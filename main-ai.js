@@ -25,23 +25,58 @@ function settingsPath() {
   return path.join(app.getPath('userData'), 'ai-settings.json');
 }
 
-// Forme stockée : { provider, model, endpoint, keyMethod, keyValue }.
-// keyMethod : 'safeStorage' (valeur = base64 du tampon chiffré) ou 'plain'
-// (repli quand le chiffrement du système n'est pas disponible).
+// Forme stockée v2 : { provider, providers: { [id]: { model, endpoint, keyMethod, keyValue, maskedKey } } }.
+//  - UNE CLÉ PAR FOURNISSEUR : changer de fournisseur ne touche pas aux
+//    autres clés ; revenir en arrière restaure la clé de ce fournisseur
+//    (avant, une seule clé partagée partait chez le nouveau fournisseur).
+//  - keyMethod : 'safeStorage' (valeur = base64 du tampon chiffré) ou 'plain'
+//    (repli quand le chiffrement du système n'est pas disponible).
+//  - maskedKey : « •••• » + 4 derniers caractères, calculé AU MOMENT DE LA
+//    SAUVEGARDE (ou au premier usage réel) — l'affichage des réglages ne
+//    déchiffre JAMAIS : sur macOS, safeStorage.decryptString bloque sur
+//    l'invite du trousseau et la page Réglages restait vide.
+//  - Migration v1 (plate : { provider, model, endpoint, keyMethod, keyValue }) :
+//    lue comme la clé du fournisseur stocké, réécrite en v2 à la prochaine
+//    sauvegarde. Aucune clé existante n'est perdue.
+function emptyEntry() {
+  return { model: '', endpoint: '', keyMethod: '', keyValue: '', maskedKey: '' };
+}
+
+function normalizeEntry(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return emptyEntry();
+  return {
+    model: typeof raw.model === 'string' ? raw.model : '',
+    endpoint: typeof raw.endpoint === 'string' ? raw.endpoint : '',
+    keyMethod: typeof raw.keyMethod === 'string' ? raw.keyMethod : '',
+    keyValue: typeof raw.keyValue === 'string' ? raw.keyValue : '',
+    maskedKey: typeof raw.maskedKey === 'string' ? raw.maskedKey : '',
+  };
+}
+
 function loadStored() {
+  let raw = null;
   try {
-    const raw = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
-    if (raw && typeof raw === 'object') {
-      return {
-        provider: typeof raw.provider === 'string' ? raw.provider : '',
-        model: typeof raw.model === 'string' ? raw.model : '',
-        endpoint: typeof raw.endpoint === 'string' ? raw.endpoint : '',
-        keyMethod: typeof raw.keyMethod === 'string' ? raw.keyMethod : '',
-        keyValue: typeof raw.keyValue === 'string' ? raw.keyValue : '',
-      };
-    }
+    raw = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
   } catch { /* pas de réglages : première utilisation */ }
-  return { provider: '', model: '', endpoint: '', keyMethod: '', keyValue: '' };
+  const stored = { provider: '', providers: {} };
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return stored;
+  if (typeof raw.provider === 'string') stored.provider = raw.provider;
+  if (raw.providers && typeof raw.providers === 'object' && !Array.isArray(raw.providers)) {
+    for (const [id, entry] of Object.entries(raw.providers)) {
+      if (typeof id === 'string' && id) stored.providers[id] = normalizeEntry(entry);
+    }
+    return stored;
+  }
+  // Migration de la forme v1 (plate) : la clé et les réglages appartiennent
+  // au fournisseur stocké. La clé masquée est inconnue sans déchiffrer —
+  // on ne déchiffre jamais à la lecture : « •••• » générique en attendant
+  // le prochain usage réel, qui la recalculera (voir ai:ask / ai:test).
+  const entry = normalizeEntry(raw);
+  if (entry.keyValue && !entry.maskedKey) entry.maskedKey = '••••';
+  if (stored.provider || entry.model || entry.endpoint || entry.keyValue || entry.keyMethod) {
+    stored.providers[stored.provider] = entry;
+  }
+  return stored;
 }
 
 function saveStored(stored) {
@@ -58,26 +93,42 @@ function encryptKey(key) {
   return { method: 'plain', value: key };
 }
 
-function decryptKey(stored) {
-  if (!stored.keyValue) return '';
-  if (stored.keyMethod === 'safeStorage') {
+function decryptKeyEntry(entry) {
+  if (!entry || !entry.keyValue) return '';
+  if (entry.keyMethod === 'safeStorage') {
     try {
-      return safeStorage.decryptString(Buffer.from(stored.keyValue, 'base64'));
+      return safeStorage.decryptString(Buffer.from(entry.keyValue, 'base64'));
     } catch {
       throw aiError('La clé enregistrée n’a pas pu être relue (chiffrement du système). Effacez-la dans « Réglages IA » puis enregistrez-la de nouveau.');
     }
   }
-  return stored.keyValue;
+  return entry.keyValue;
 }
 
-// Ce que le rendu a le droit de voir : jamais la clé en clair.
+// Après un usage réel (déchiffrement), on recalcule la clé masquée si elle
+// était inconnue ou périmée (cas d'une clé migrée de la forme v1) — sans
+// jamais bloquer la demande si l'écriture échoue.
+function refreshMaskedKey(stored, plainKey) {
+  try {
+    const entry = stored.providers[stored.provider];
+    if (!entry || !entry.keyValue || !plainKey) return;
+    const masked = maskKey(plainKey);
+    if (entry.maskedKey !== masked) {
+      entry.maskedKey = masked;
+      saveStored(stored);
+    }
+  } catch { /* l'affichage se rattrapera au prochain usage */ }
+}
+
+// Ce que le rendu a le droit de voir : jamais la clé en clair, et JAMAIS de
+// déchiffrement sur ce chemin — on lit la clé masquée stockée à la sauvegarde.
 function publicSettings() {
   const stored = loadStored();
+  const entry = stored.providers[stored.provider] || emptyEntry();
   const def = PROVIDERS[stored.provider];
-  const hasKey = Boolean(stored.keyValue);
-  const key = hasKey ? decryptKey(stored) : '';
-  const endpoint = stored.endpoint || (def ? def.defaultEndpoint : '');
-  const model = stored.model || (def ? def.defaultModel : '');
+  const hasKey = Boolean(entry.keyValue);
+  const endpoint = entry.endpoint || (def ? def.defaultEndpoint : '');
+  const model = entry.model || (def ? def.defaultModel : '');
   const configured = Boolean(def)
     && model.trim() !== ''
     && endpoint.trim() !== ''
@@ -87,18 +138,25 @@ function publicSettings() {
     model,
     endpoint,
     hasKey,
-    maskedKey: hasKey ? maskKey(key) : '',
-    keyMethod: stored.keyMethod,
+    maskedKey: hasKey ? (entry.maskedKey || '••••') : '',
+    keyMethod: entry.keyMethod,
     encryptionAvailable: safeStorage.isEncryptionAvailable(),
     configured,
-    providers: PROVIDER_IDS.map((id) => ({
-      id,
-      label: PROVIDERS[id].label,
-      needsKey: PROVIDERS[id].needsKey,
-      defaultModel: PROVIDERS[id].defaultModel,
-      defaultEndpoint: PROVIDERS[id].defaultEndpoint,
-      keyHelp: PROVIDERS[id].keyHelp,
-    })),
+    providers: PROVIDER_IDS.map((id) => {
+      const p = stored.providers[id] || emptyEntry();
+      return {
+        id,
+        label: PROVIDERS[id].label,
+        needsKey: PROVIDERS[id].needsKey,
+        defaultModel: PROVIDERS[id].defaultModel,
+        defaultEndpoint: PROVIDERS[id].defaultEndpoint,
+        keyHelp: PROVIDERS[id].keyHelp,
+        model: p.model,
+        endpoint: p.endpoint,
+        hasKey: Boolean(p.keyValue),
+        maskedKey: p.keyValue ? (p.maskedKey || '••••') : '',
+      };
+    }),
   };
 }
 
@@ -141,18 +199,24 @@ export function registerAiHandlers() {
       const provider = String(payload.provider || '').trim();
       if (!PROVIDERS[provider]) return { ok: false, error: 'Choisissez un fournisseur.' };
       const stored = loadStored();
+      const entry = stored.providers[provider] || (stored.providers[provider] = emptyEntry());
       const key = typeof payload.key === 'string' ? payload.key : '';
       if (key !== '') {
         if (key.trim().length < 8) {
           return { ok: false, error: 'Cette clé semble trop courte : vérifiez que vous l’avez copiée en entier.' };
         }
         const enc = encryptKey(key.trim());
-        stored.keyMethod = enc.method;
-        stored.keyValue = enc.value;
+        entry.keyMethod = enc.method;
+        entry.keyValue = enc.value;
+        // Clé masquée calculée ici, une fois pour toutes : l'affichage ne
+        // déchiffre jamais (voir publicSettings).
+        entry.maskedKey = maskKey(key.trim());
       }
+      // Champ clé vide : on garde la clé DE CE fournisseur — les clés des
+      // autres fournisseurs ne sont jamais touchées.
+      entry.model = String(payload.model || '').trim();
+      entry.endpoint = String(payload.endpoint || '').trim();
       stored.provider = provider;
-      stored.model = String(payload.model || '').trim();
-      stored.endpoint = String(payload.endpoint || '').trim();
       saveStored(stored);
       return { ok: true, settings: publicSettings() };
     } catch (e) {
@@ -163,8 +227,14 @@ export function registerAiHandlers() {
   ipcMain.handle('ai:clear-key', () => {
     try {
       const stored = loadStored();
-      stored.keyMethod = '';
-      stored.keyValue = '';
+      // Efface la clé du fournisseur courant seulement — les autres
+      // fournisseurs gardent la leur.
+      const entry = stored.providers[stored.provider];
+      if (entry) {
+        entry.keyMethod = '';
+        entry.keyValue = '';
+        entry.maskedKey = '';
+      }
       saveStored(stored);
       return { ok: true, settings: publicSettings() };
     } catch {
@@ -185,12 +255,17 @@ export function registerAiHandlers() {
       if (!def) {
         return { ok: false, error: 'Aucune IA n’est configurée. Ouvrez « Réglages IA » pour choisir un fournisseur et enregistrer une clé.' };
       }
+      const entry = stored.providers[stored.provider] || emptyEntry();
+      // Usage réel : le déchiffrement a lieu ici (l'invite du trousseau,
+      // s'il y en a une, n'apparaît qu'à ce moment — jamais à l'affichage).
+      const key = decryptKeyEntry(entry);
+      refreshMaskedKey(stored, key);
       const prompt = buildPrompt(question, context.slice(0, 6));
       const answer = await callProvider({
         provider: stored.provider,
-        model: stored.model || def.defaultModel,
-        endpoint: stored.endpoint || def.defaultEndpoint,
-        key: decryptKey(stored),
+        model: entry.model || def.defaultModel,
+        endpoint: entry.endpoint || def.defaultEndpoint,
+        key,
       }, prompt);
       return { ok: true, answer };
     } catch (e) {
@@ -205,11 +280,15 @@ export function registerAiHandlers() {
       if (!def) {
         return { ok: false, error: 'Aucune IA n’est configurée. Choisissez un fournisseur et enregistrez une clé, puis testez de nouveau.' };
       }
+      const entry = stored.providers[stored.provider] || emptyEntry();
+      // Usage réel : le déchiffrement a lieu ici (voir ai:ask).
+      const key = decryptKeyEntry(entry);
+      refreshMaskedKey(stored, key);
       const answer = await callProvider({
         provider: stored.provider,
-        model: stored.model || def.defaultModel,
-        endpoint: stored.endpoint || def.defaultEndpoint,
-        key: decryptKey(stored),
+        model: entry.model || def.defaultModel,
+        endpoint: entry.endpoint || def.defaultEndpoint,
+        key,
       }, 'Réponds uniquement par le mot OK.');
       return { ok: true, answer: answer.slice(0, 200) };
     } catch (e) {

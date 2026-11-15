@@ -4,6 +4,9 @@
 // re-rendre le canevas à partir du document déjà chargé, jamais recharger.
 import * as pdfjsLib from 'app://assets/pdfjs/pdf.mjs';
 import { searchDocs } from 'app://renderer/search.js';
+import {
+  ocrRectsForTerm, textRectsForTerm, pdfRectToCss, clampCssRect,
+} from 'app://renderer/highlight.js';
 import { initTools, convertValue, evaluateExpression } from 'app://renderer/tools.js';
 
 // IMPORTANT : pour le schéma app://, « renderer » est le HÔTE de l'URL
@@ -30,8 +33,11 @@ const state = {
   pdfDocs: {},   // docId -> PDFDocumentProxy
   pdfPromises: {}, // docId -> promesse getDocument (évite les doubles chargements)
   pdfLoads: {},  // docId -> nombre d'appels getDocument (doit rester à 1)
+  ocrWordsCache: {}, // docId -> { pages: [...] } (boîtes OCR des fournis) ou false (absent)
   ready: null,
 };
+
+let lastHighlightRects = []; // rectangles CSS (par rapport au canevas) de la page affichée
 
 let renderSeq = 0;
 let currentRenderTask = null;
@@ -73,27 +79,27 @@ async function loadData() {
     docsMeta.docs.map((d) => fetch('app://' + d.index).then((r) => r.json())),
   );
   docsMeta.docs.forEach((d, i) => { state.indexes[d.id] = indexes[i]; });
-  // Documents fournis masqués par l'utilisateur : retirés de la liste
+  // Documents fournis supprimés par l'utilisateur : retirés de la liste
   // AVANT tout le reste (cartes, recherche, portée) — ils ne sont ni
-  // affichés, ni cherchés, ni chargés. Restauration depuis « Documents
-  // masqués » (import.js).
-  if (window.pohDesktop && window.pohDesktop.import && window.pohDesktop.import.hiddenList) {
+  // affichés, ni cherchés, ni chargés. Suppression définitive : aucune
+  // restauration n'est proposée.
+  if (window.pohDesktop && window.pohDesktop.import && window.pohDesktop.import.deletedList) {
     try {
-      const hidden = await window.pohDesktop.import.hiddenList();
-      const hiddenIds = new Set((hidden || []).map((h) => h.id));
-      if (hiddenIds.size) {
-        docsMeta.docs = docsMeta.docs.filter((d) => !hiddenIds.has(d.id));
-        for (const id of hiddenIds) delete state.indexes[id];
+      const deleted = await window.pohDesktop.import.deletedList();
+      const deletedIds = new Set((deleted || []).map((h) => h.id));
+      if (deletedIds.size) {
+        docsMeta.docs = docsMeta.docs.filter((d) => !deletedIds.has(d.id));
+        for (const id of deletedIds) delete state.indexes[id];
         const scope = document.getElementById('scopeSelect');
         if (scope) {
-          for (const id of hiddenIds) {
+          for (const id of deletedIds) {
             const opt = scope.querySelector(`option[value="${id}"]`);
             if (opt) opt.remove();
           }
-          if (scope.value && hiddenIds.has(scope.value)) scope.value = 'all';
+          if (scope.value && deletedIds.has(scope.value)) scope.value = 'all';
         }
       }
-    } catch { /* liste des masqués illisible : on garde les 4 fournis */ }
+    } catch { /* liste des supprimés illisible : on garde les 4 fournis */ }
   }
   // Documents importés (registre userData/pohs) : même format que les index
   // fournis, chargés avec eux — c'est LA source unique de vérité pour la
@@ -152,6 +158,10 @@ async function renderCurrentPage() {
   const canvas = $('pdfCanvas');
   const ctx = canvas.getContext('2d');
   $('pdfEmpty').hidden = true;
+  // Le surlignage de la page précédente ne doit jamais rester visible
+  // pendant le rendu de la nouvelle (il serait décalé) : on l'efface
+  // dès le départ, le nouveau est peint après le rendu.
+  clearHighlights();
   try {
     if (currentRenderTask) { try { await currentRenderTask.cancel(); } catch { /* déjà terminé */ } }
     const pdf = await getPdfDoc(docId);
@@ -202,11 +212,18 @@ async function renderCurrentPage() {
     updateReaderChrome();
     centerCurrentPage();
     centeringArmed = true;
+    // Surlignage du terme cherché sur cette page, recalculé à chaque
+    // rendu (le zoom et le mode changent le viewport) : il survit donc
+    // au changement de page, de section, de document et de zoom.
+    await updateHighlights(page, viewport);
     requestAnimationFrame(() => {
       if (mySeq !== renderSeq) return;
       requestAnimationFrame(() => {
         if (mySeq !== renderSeq) return;
         centerCurrentPage();
+        // Le recentrage peut décaler le canevas (marge haute) : le calque
+        // de surlignage suit, avec les mêmes rectangles.
+        positionHighlightLayer();
       });
     });
     return { page: pageNum, error: 'aucune', loads: { ...state.pdfLoads } };
@@ -247,6 +264,161 @@ async function openDocPage(docId, pageNum) {
   updateReaderChrome(); // titre, bannière OCR, puces : à jour même si le rendu échoue
   const res = await renderCurrentPage();
   return { doc: docId, page: state.currentPage, error: res.error, loads: { ...state.pdfLoads } };
+}
+
+// ---------------------------------------------------------------------------
+// Surlignage des termes cherchés (v1.1.3)
+// ---------------------------------------------------------------------------
+// Les rectangles sont des <div> absolument positionnés AU-DESSUS du
+// canevas (jamais dessinés dessus — le re-rendu les effacerait), dans le
+// calque #pdfHighlightLayer, qui suit le canevas (même origine, même
+// taille, recalculé à chaque rendu et à chaque recentrage). Le terme
+// surligné est celui du résultat courant (result.termFound), sur toutes
+// ses occurrences de la page affichée — pas seulement la première.
+// Sources, dans l'ordre : le texte réel du PDF (getTextContent, aucun
+// changement d'index), puis les boîtes OCR (index de l'importé, ou
+// fichier userData/ocr-words des fournis). Sans recherche active, rien.
+
+function clearHighlights() {
+  lastHighlightRects = [];
+  const layer = $('pdfHighlightLayer');
+  if (layer) {
+    layer.innerHTML = '';
+    // Un calque vide avec une géométrie périmée (page/zoom d'avant)
+    // étendrait quand même la zone de défilement : on la réinitialise.
+    layer.style.left = '';
+    layer.style.top = '';
+    layer.style.width = '';
+    layer.style.height = '';
+  }
+}
+
+// Recale le calque sur le canevas (origine + taille), sans toucher aux
+// rectangles qu'il contient (exprimés par rapport au canevas).
+function positionHighlightLayer() {
+  const layer = $('pdfHighlightLayer');
+  const canvas = $('pdfCanvas');
+  const wrap = $('pdfPageWrap');
+  if (!layer || !canvas || !wrap || !lastHighlightRects.length) return;
+  const c = canvas.getBoundingClientRect();
+  const w = wrap.getBoundingClientRect();
+  layer.style.left = (c.left - w.left) + 'px';
+  layer.style.top = (c.top - w.top) + 'px';
+  layer.style.width = c.width + 'px';
+  layer.style.height = c.height + 'px';
+}
+
+function paintHighlightRects(rects) {
+  lastHighlightRects = rects;
+  const layer = $('pdfHighlightLayer');
+  if (!layer) return;
+  layer.innerHTML = '';
+  for (const r of rects) {
+    const d = document.createElement('div');
+    d.className = 'pdf-highlight';
+    d.style.left = r.left + 'px';
+    d.style.top = r.top + 'px';
+    d.style.width = r.width + 'px';
+    d.style.height = r.height + 'px';
+    layer.appendChild(d);
+  }
+  positionHighlightLayer();
+}
+
+// Boîtes OCR des documents fournis (172N) : chargées une fois par
+// document via IPC, puis en cache (y compris l'absence de fichier).
+async function ensureOcrWords(docId) {
+  if (docId in state.ocrWordsCache) return state.ocrWordsCache[docId];
+  let data = false;
+  try {
+    const api = window.pohDesktop && window.pohDesktop.import;
+    if (api && api.getOcrWords) {
+      const res = await api.getOcrWords(docId);
+      if (res && res.ok && res.found && res.data) data = res.data;
+    }
+  } catch { /* pas de boîtes : le lecteur continue sans surlignage OCR */ }
+  state.ocrWordsCache[docId] = data;
+  return data;
+}
+
+// Boîtes OCR de la page courante : index de l'importé d'abord, sinon
+// fichier userData/ocr-words du fourni. Retourne
+// { imageWidth, imageHeight, words } ou null.
+async function ocrWordsForPage(docId, pageNum) {
+  const idx = state.indexes[docId];
+  const entry = idx && idx.pages ? idx.pages[pageNum - 1] : null;
+  if (entry && entry.ocr_words && Array.isArray(entry.ocr_words.words)) {
+    return entry.ocr_words;
+  }
+  const meta = docMeta(docId);
+  if (meta && meta.ocr && meta.pdf && meta.pdf.startsWith('assets/')) {
+    const wordsDoc = await ensureOcrWords(docId);
+    if (wordsDoc && Array.isArray(wordsDoc.pages)) {
+      const pg = wordsDoc.pages.find((p) => p.page === pageNum);
+      if (pg && Array.isArray(pg.words)) return pg;
+    }
+  }
+  return null;
+}
+
+async function updateHighlights(page, viewport) {
+  const result = state.currentResult >= 0 ? state.results[state.currentResult] : null;
+  const term = result ? result.termFound : null;
+  if (!term) { clearHighlights(); return; }
+  try {
+    let rectsPdf = [];
+    // 1) PDF à vrai texte : positions via getTextContent au moment du rendu.
+    const tc = await page.getTextContent();
+    const items = (tc.items || []).map((it) => ({
+      str: it.str,
+      x: it.transform ? it.transform[4] : 0,
+      y: it.transform ? it.transform[5] : 0,
+      width: typeof it.width === 'number' ? it.width : 0,
+      height: typeof it.height === 'number' ? it.height
+        : (it.transform ? Math.abs(it.transform[3]) : 10),
+    }));
+    rectsPdf = textRectsForTerm(items, term);
+    // 2) PDF scanné : boîtes OCR (rien dans le texte réel).
+    if (!rectsPdf.length) {
+      const wordsPage = await ocrWordsForPage(state.currentDoc, state.currentPage);
+      if (wordsPage) {
+        const vp0 = page.getViewport({ scale: 1 });
+        rectsPdf = ocrRectsForTerm(
+          wordsPage.words, wordsPage.imageWidth, wordsPage.imageHeight,
+          term, vp0.width, vp0.height);
+      }
+    }
+    const cssRects = rectsPdf
+      .map((r) => pdfRectToCss(viewport, r))
+      .map((r) => clampCssRect(r, viewport.width, viewport.height))
+      .filter(Boolean);
+    paintHighlightRects(cssRects);
+  } catch {
+    // Le surlignage ne doit jamais casser l'affichage de la page.
+    clearHighlights();
+  }
+}
+
+// Mesure pour l'auto-test : nombre de rectangles visibles sur la page
+// courante, terme surligné, et alignement du calque sur le canevas.
+function highlightInfo() {
+  const layer = $('pdfHighlightLayer');
+  const canvas = $('pdfCanvas');
+  const result = state.currentResult >= 0 ? state.results[state.currentResult] : null;
+  let aligned = false;
+  if (layer && canvas && lastHighlightRects.length) {
+    const l = layer.getBoundingClientRect();
+    const c = canvas.getBoundingClientRect();
+    aligned = Math.abs(l.left - c.left) <= 1 && Math.abs(l.top - c.top) <= 1 &&
+      Math.abs(l.width - c.width) <= 1 && Math.abs(l.height - c.height) <= 1;
+  }
+  return JSON.stringify({
+    term: result ? result.termFound : null,
+    page: state.currentPage,
+    doc: state.currentDoc,
+    rects: layer ? layer.childElementCount : 0,
+    aligned,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -333,6 +505,7 @@ async function runSearch(query) {
   $('searchStatus').textContent = status;
   renderResults();
   if (results.length) await openResult(0);
+  else clearHighlights(); // sans résultat, aucun surlignage ne doit rester
   return { total, results };
 }
 
@@ -513,7 +686,10 @@ function bindEvents() {
   // le canevas vide du démarrage.
   if (!scrollResizeObserver) {
     scrollResizeObserver = new ResizeObserver(() => {
-      if (centeringArmed) centerCurrentPage();
+      if (centeringArmed) {
+        centerCurrentPage();
+        positionHighlightLayer();
+      }
     });
     scrollResizeObserver.observe($('pdfScroll'));
   }
@@ -561,7 +737,7 @@ state.ready = (async () => {
   bindEvents();
   updateReaderChromeSafe();
   // Document par défaut : le premier document visible (172N d'habitude ;
-  // si l'utilisateur l'a masqué, c'est le suivant). Aucun document :
+  // si l'utilisateur l'a supprimé, c'est le suivant). Aucun document :
   // le lecteur reste sur son message vide.
   const firstDoc = state.docsMeta.docs[0];
   if (firstDoc) await openDocPage(firstDoc.id, 1);
@@ -643,6 +819,7 @@ window.__poh = {
   centeringInfo,
   floatingNavInfo,
   layoutOverlapInfo,
+  highlightInfo,
   nonBlankPixels: () => nonBlankPixels(),
   convert: (kind, value) => convertValue(kind, value),
   calc: (expr) => evaluateExpression(expr),

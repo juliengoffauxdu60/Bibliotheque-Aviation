@@ -60,11 +60,8 @@ function injectStyles() {
 .doc-card .doc-delete { position: absolute; top: 4px; right: 6px; width: 22px; height: 22px; line-height: 20px; text-align: center; border-radius: 50%; border: 1px solid #d5dde4; background: #fff; color: #a33; font-size: 13px; font-weight: 700; cursor: pointer; padding: 0; }
 .doc-card .doc-delete:hover { background: #fdecec; border-color: #a33; }
 .doc-card .doc-imported { font-size: 11px; color: #1e6b34; }
-#hiddenBox { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
-#hiddenBox .hidden-title { font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 6px; }
-#hiddenBox .hidden-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; padding: 4px 0; }
-#hiddenBox .hidden-row button { padding: 4px 10px; border-radius: 8px; border: 1px solid var(--line); background: #fff; font-weight: 700; cursor: pointer; }
-#hiddenBox .hidden-row button:hover { background: var(--blue-soft); }`;
+#ocrBanner .reocr-btn { margin-left: 10px; padding: 4px 10px; border-radius: 8px; border: 1px solid #8a6d00; background: #fff; font-weight: 700; font-size: 12px; color: #5c4a00; }
+#ocrBanner .reocr-btn:hover { background: #fff8e6; }`;
   document.head.appendChild(st);
 }
 
@@ -79,10 +76,6 @@ function buildImportBox() {
   box.innerHTML = `
     <button type="button" id="importAddBtn">＋ Ajouter un document</button>
     <div id="importStatus" aria-live="polite"></div>
-    <div id="hiddenBox" hidden>
-      <div class="hidden-title">Documents masqués</div>
-      <div id="hiddenList"></div>
-    </div>
     <div id="importWarning" hidden>
       <div class="warn-title">⚠ Ce PDF semble scanné (aucun texte).</div>
       <div id="importWarningText"></div>
@@ -134,10 +127,9 @@ function hideProgress() { const w = $('importProgress'); if (w) w.hidden = true;
 
 // ---------------------------------------------------------------------------
 // Documents : options de portée + boutons ✕ sur TOUTES les cartes.
-// Importé : ✕ = supprimer le fichier (définitif). Fourni : ✕ = masquer
-// (le fichier reste dans l'application, restorable depuis « Documents
-// masqués » ci-dessous) — un élève qui n'a pas besoin du 172R ou du 150
-// peut l'enlever sans perdre le document.
+// ✕ = supprimer, définitivement : importé → le fichier est effacé ;
+// fourni → son id est enregistré dans deleted-docs.json et il est filtré
+// partout (ses PDF vivent dans le paquet, on ne peut pas les effacer).
 function decorateImportedDocs() {
   const scope = $('scopeSelect');
   const importedIds = new Set(state.imported.map((e) => e.doc_id));
@@ -163,8 +155,8 @@ function decorateImportedDocs() {
     const del = document.createElement('button');
     del.type = 'button';
     del.className = 'doc-delete';
-    del.title = isImported ? 'Supprimer ce document importé' : 'Masquer ce document';
-    del.setAttribute('aria-label', `${isImported ? 'Supprimer' : 'Masquer'} ${title}`);
+    del.title = 'Supprimer ce document';
+    del.setAttribute('aria-label', `Supprimer ${title}`);
     del.textContent = '✕';
     del.addEventListener('click', (e) => {
       e.stopPropagation(); e.preventDefault();
@@ -172,66 +164,10 @@ function decorateImportedDocs() {
         const entry = state.imported.find((x) => x.doc_id === docId);
         onDeleteClick(entry || { doc_id: docId, title });
       } else {
-        onHideClick(docId, title);
+        onDeleteClick({ doc_id: docId, title, bundled: true });
       }
     });
     card.appendChild(del);
-  }
-}
-
-async function renderHiddenDocs() {
-  const a = api();
-  const box = $('hiddenBox');
-  const list = $('hiddenList');
-  if (!a || !a.hiddenList || !box || !list) return;
-  let hidden = [];
-  try { hidden = (await a.hiddenList()) || []; } catch { hidden = []; }
-  list.innerHTML = '';
-  box.hidden = hidden.length === 0;
-  for (const h of hidden) {
-    const row = document.createElement('div');
-    row.className = 'hidden-row';
-    const name = document.createElement('span');
-    name.textContent = h.title;
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.textContent = 'Restaurer';
-    btn.addEventListener('click', async (e) => {
-      e.currentTarget.blur();
-      try {
-        const res = await a.unhideDoc(h.id);
-        if (!res || !res.ok) { setStatus('Restauration impossible : ' + (res && res.error ? res.error : 'erreur inconnue'), 'error'); return; }
-        setStatus(`« ${h.title} » restauré. Rechargement…`, 'ok');
-        scheduleReload(800);
-      } catch (err) { setStatus('Restauration impossible : ' + err.message, 'error'); }
-    });
-    row.appendChild(name);
-    row.appendChild(btn);
-    list.appendChild(row);
-  }
-}
-
-// Masquer un document fourni (avec confirmation) : il disparaît des
-// cartes et de la recherche, mais reste dans l'application.
-async function onHideClick(docId, title) {
-  const a = api();
-  if (!a) return;
-  const ok = window.confirm(
-    `Masquer « ${title} » ?\n\nLe document ne sera plus affiché ni cherché, mais il reste dans l’application : ` +
-    'vous pourrez le restaurer depuis « Documents masqués » ci-dessous.',
-  );
-  if (!ok) return;
-  setStatus('Masquage en cours…', '');
-  try {
-    const res = await a.hideDoc(docId);
-    if (!res || !res.ok) {
-      setStatus('Masquage impossible : ' + (res && res.error ? res.error : 'erreur inconnue'), 'error');
-      return;
-    }
-    setStatus(`« ${title} » masqué. Rechargement…`, 'ok');
-    scheduleReload(800);
-  } catch (e) {
-    setStatus('Masquage impossible : ' + e.message, 'error');
   }
 }
 
@@ -245,7 +181,6 @@ async function refreshImported() {
     setStatus('Impossible de lister les documents importés : ' + e.message, 'error');
   }
   decorateImportedDocs();
-  await renderHiddenDocs();
   return state.imported;
 }
 
@@ -347,7 +282,9 @@ async function startOcr(docId) {
       canvas.height = Math.floor(viewport.height);
       await page.render({ canvasContext: ctx, viewport }).promise;
       const pngBase64 = canvas.toDataURL('image/png').split(',')[1];
-      const res = await a.ocrPage(docId, p, pngBase64);
+      // Dimensions du PNG envoyé : sans elles, les boîtes de mots OCR (en
+      // pixels d'image) ne pourraient pas être replacées sur la page.
+      const res = await a.ocrPage(docId, p, pngBase64, canvas.width, canvas.height);
       if (!res || !res.ok) {
         await a.ocrCancel(docId).catch(() => {});
         hideProgress();
@@ -381,14 +318,132 @@ async function startOcr(docId) {
 }
 
 // ---------------------------------------------------------------------------
-// Suppression d'un document importé (avec confirmation)
+// Refaire l'OCR (avec surlignage) — bouton dans la bannière OCR du lecteur
+// ---------------------------------------------------------------------------
+// La bannière ne s'affiche que pour les documents OCR (172N fourni, imports
+// OCR) : le bouton est dedans, il apparaît et disparaît avec elle.
+//   - Document importé : relance startOcr — l'index est écrasé avec texte
+//     + boîtes de mots (même chemin que l'OCR initial).
+//   - Document fourni (172N) : même boucle, mais les boîtes vont dans
+//     userData/ocr-words/<doc_id>.json — l'index fourni n'est jamais touché.
+function addReocrButton() {
+  const banner = $('ocrBanner');
+  if (!banner || $('reocrBtn')) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.id = 'reocrBtn';
+  btn.className = 'reocr-btn';
+  btn.textContent = 'Refaire l’OCR (avec surlignage)';
+  btn.title = 'Refait la reconnaissance du texte et enregistre la position de chaque mot, pour surligner les résultats dans le lecteur.';
+  btn.addEventListener('click', (e) => { onReocrClick(); e.currentTarget.blur(); });
+  banner.appendChild(btn);
+}
+
+async function onReocrClick() {
+  const a = api();
+  if (!a) return;
+  const card = document.querySelector('.doc-card.active');
+  const docId = card && card.dataset.doc;
+  if (!docId) { setStatus('Aucun document ouvert pour refaire l’OCR.', 'error'); return; }
+  if (state.ocrRunning) { setStatus('Un OCR est déjà en cours.', 'error'); return; }
+  const entry = state.imported.find((e) => e.doc_id === docId);
+  if (entry) { await startOcr(docId); return; }
+  let docs;
+  try {
+    docs = await fetch('app://data/docs.json').then((r) => r.json());
+  } catch (e) {
+    setStatus('Impossible de retrouver ce document : ' + e.message, 'error');
+    return;
+  }
+  const doc = (docs.docs || []).find((d) => d.id === docId);
+  if (!doc) { setStatus('Document fourni introuvable : ' + docId, 'error'); return; }
+  await startReocrWords(docId, doc.pdf, doc.totalPages, doc.title);
+}
+
+// Re-OCR d'un document fourni : même boucle de rendu page par page que
+// startOcr, mais les pages partent sur poh-import:ocr-words-page et le
+// résultat est enregistré dans userData/ocr-words/<doc_id>.json.
+async function startReocrWords(docId, pdfRelPath, totalPages, title) {
+  const a = api();
+  if (!a || !docId) return null;
+  if (state.ocrRunning) { setStatus('Un OCR est déjà en cours.', 'error'); return null; }
+  state.ocrRunning = true;
+  state.ocrCancelRequested = false;
+  $('importWarning').hidden = true;
+  $('importAddBtn').disabled = true;
+  try {
+    setStatus('Re-OCR : chargement du PDF…', '');
+    const pdf = await pdfjsLib.getDocument({
+      url: 'app://' + pdfRelPath,
+      disableRange: true,
+      disableStream: true,
+      isEvalSupported: false,
+    }).promise;
+    const total = pdf.numPages;
+    if (total !== totalPages) {
+      setStatus(`Re-OCR impossible : ce document a ${total} pages, ${totalPages} attendues.`, 'error');
+      return null;
+    }
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    for (let p = 1; p <= total; p++) {
+      if (state.ocrCancelRequested) {
+        await a.ocrCancel(docId).catch(() => {});
+        hideProgress();
+        setStatus(`Re-OCR annulé à la page ${p - 1} sur ${total}. Aucune boîte enregistrée : relancez pour recommencer.`, 'error');
+        return null;
+      }
+      showProgress(p - 1, total, `Re-OCR — page ${p} sur ${total} (français + anglais, 100 % local)…`);
+      const page = await pdf.getPage(p);
+      const viewport = page.getViewport({ scale: OCR_RENDER_SCALE });
+      canvas.width = Math.floor(viewport.width);
+      canvas.height = Math.floor(viewport.height);
+      await page.render({ canvasContext: ctx, viewport }).promise;
+      const pngBase64 = canvas.toDataURL('image/png').split(',')[1];
+      const res = await a.ocrWordsPage(docId, p, pngBase64, canvas.width, canvas.height);
+      if (!res || !res.ok) {
+        await a.ocrCancel(docId).catch(() => {});
+        hideProgress();
+        setStatus(`Re-OCR arrêté à la page ${p} sur ${total} : ` + (res && res.error ? res.error : 'erreur inconnue'), 'error');
+        return null;
+      }
+      showProgress(p, total, `Re-OCR — page ${p} sur ${total} (${res.chars} caractères, ${res.words} mots repérés)…`);
+    }
+    setStatus('Re-OCR terminé : enregistrement des boîtes…', '');
+    const done = await a.ocrWordsFinish(docId, total);
+    hideProgress();
+    if (!done || !done.ok) {
+      setStatus('Re-OCR terminé mais boîtes non enregistrées : ' + (done && done.error ? done.error : 'erreur inconnue'), 'error');
+      return null;
+    }
+    setStatus(`Re-OCR terminé pour « ${title || docId} » (${done.totalPages} pages, ${done.wordsTotal} mots repérés). Rechargement…`, 'ok');
+    scheduleReload(1200);
+    return done;
+  } catch (e) {
+    try { await a.ocrCancel(docId); } catch { /* déjà arrêté */ }
+    hideProgress();
+    setStatus('Re-OCR impossible : ' + e.message, 'error');
+    return null;
+  } finally {
+    state.ocrRunning = false;
+    $('importAddBtn').disabled = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Suppression d'un document (avec confirmation) — un seul chemin pour les
+// deux sortes : importé → le fichier est effacé ; fourni (entry.bundled) →
+// l'id est enregistré dans deleted-docs.json (suppression définitive).
 // ---------------------------------------------------------------------------
 async function onDeleteClick(entry) {
   const a = api();
   if (!a) return;
+  const bundled = !!entry.bundled;
   const ok = window.confirm(
-    `Supprimer « ${entry.title} » ?\n\nLe PDF importé et son index seront supprimés du dossier de l’application. ` +
-    'Les documents fournis ne sont jamais concernés.',
+    bundled
+      ? `Supprimer « ${entry.title} » ?\n\nIl disparaîtra de la liste et de la recherche, définitivement.`
+      : `Supprimer « ${entry.title} » ?\n\nLe PDF et sa recherche seront supprimés de l’application, définitivement. ` +
+        'Les documents fournis (172N, 172R, 150, SOP) ne sont pas touchés.',
   );
   if (!ok) return;
   setStatus('Suppression en cours…', '');
@@ -411,6 +466,7 @@ async function onDeleteClick(entry) {
 async function init() {
   injectStyles();
   buildImportBox();
+  addReocrButton();
   await refreshImported();
 }
 
@@ -435,12 +491,14 @@ window.__pohImport = {
   list: () => refreshImported(),
   importFile: (filePath) => importFilePath(filePath),
   startOcr: (docId) => startOcr(docId),
-  deleteDoc: (docId) => onDeleteClick(
-    state.imported.find((e) => e.doc_id === docId) || { doc_id: docId, title: docId }),
-  hideDoc: (docId) => {
+  reocr: () => onReocrClick(),
+  startReocrWords: (docId, pdfRelPath, totalPages, title) => startReocrWords(docId, pdfRelPath, totalPages, title),
+  deleteDoc: (docId) => {
+    const entry = state.imported.find((e) => e.doc_id === docId);
+    if (entry) return onDeleteClick(entry);
     const card = document.querySelector(`.doc-card[data-doc="${docId}"]`);
     const title = (card && card.querySelector('.doc-name') || {}).textContent || docId;
-    return onHideClick(docId, title);
+    return onDeleteClick({ doc_id: docId, title, bundled: true });
   },
-  hiddenList: () => api() && api().hiddenList ? api().hiddenList() : Promise.resolve([]),
+  deletedList: () => api() && api().deletedList ? api().deletedList() : Promise.resolve([]),
 };
