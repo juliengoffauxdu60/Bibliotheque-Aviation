@@ -32,6 +32,15 @@ export function convertValue(kind, value) {
   return fmt(c.fwd(v)) + ' ' + c.to;
 }
 
+// Conversion dans le sens inverse (utilisée par l'auto-test).
+export function convertValueReverse(kind, value) {
+  const c = CONVERTERS.find((x) => x.id === kind);
+  if (!c) return 'Convertisseur inconnu';
+  const v = parseNumber(value);
+  if (!Number.isFinite(v)) return 'Valeur invalide';
+  return fmt(c.rev(v)) + ' ' + c.from;
+}
+
 export function initTools() {
   const wrap = document.getElementById('converters');
   wrap.innerHTML = '';
@@ -40,30 +49,41 @@ export function initTools() {
     row.className = 'converter-row';
     row.innerHTML =
       `<label for="conv-${c.id}">${c.label}</label>` +
-      `<input id="conv-${c.id}" type="text" inputmode="decimal" placeholder="0" aria-label="${c.label}">` +
+      `<input id="conv-${c.id}" type="text" inputmode="decimal" placeholder="0" aria-label="${c.label} (${c.from})">` +
       `<span class="conv-unit">${c.from}</span>` +
-      `<button type="button" class="swap" title="Inverser le sens" aria-label="Inverser le sens">⇄</button>` +
-      `<span class="conv-result">—</span>`;
-    const input = row.querySelector('input');
-    const unit = row.querySelector('.conv-unit');
-    const result = row.querySelector('.conv-result');
-    const swap = row.querySelector('.swap');
-    let reversed = false;
-    const update = () => {
-      const v = parseNumber(input.value);
-      if (input.value.trim() === '') { result.textContent = '—'; return; }
-      if (!Number.isFinite(v)) { result.textContent = 'Valeur invalide'; return; }
-      result.textContent = reversed
-        ? fmt(c.rev(v)) + ' ' + c.from
-        : fmt(c.fwd(v)) + ' ' + c.to;
+      `<input id="conv-${c.id}-2" type="text" inputmode="decimal" placeholder="0" aria-label="${c.label} (${c.to})">` +
+      `<span class="conv-unit">${c.to}</span>` +
+      `<span class="conv-error" role="alert"></span>`;
+    const inputA = row.querySelector('#conv-' + c.id);
+    const inputB = row.querySelector('#conv-' + c.id + '-2');
+    const error = row.querySelector('.conv-error');
+    // Drapeau de mise à jour programmatique : écrire dans un champ ne doit
+    // pas redéclencher l'autre en boucle.
+    let updating = false;
+    const convert = (fromInput, toInput, fn) => {
+      if (updating) return;
+      if (fromInput.value.trim() === '') {
+        updating = true;
+        toInput.value = '';
+        updating = false;
+        error.textContent = '';
+        return;
+      }
+      const v = parseNumber(fromInput.value);
+      if (!Number.isFinite(v)) {
+        updating = true;
+        toInput.value = '';
+        updating = false;
+        error.textContent = 'Valeur invalide — entrez un nombre.';
+        return;
+      }
+      error.textContent = '';
+      updating = true;
+      toInput.value = fmt(fn(v));
+      updating = false;
     };
-    input.addEventListener('input', update);
-    swap.addEventListener('click', (e) => {
-      reversed = !reversed;
-      unit.textContent = reversed ? c.to : c.from;
-      update();
-      e.currentTarget.blur();
-    });
+    inputA.addEventListener('input', () => convert(inputA, inputB, c.fwd));
+    inputB.addEventListener('input', () => convert(inputB, inputA, c.rev));
     wrap.appendChild(row);
   }
 

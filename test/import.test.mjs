@@ -19,7 +19,10 @@ import {
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const base = path.join(root, '..');
-const docsMeta = JSON.parse(fs.readFileSync(path.join(base, 'data/docs.json'), 'utf8'));
+// Documents anciennement fournis, désormais fixtures de test uniquement
+// (v1.2.0 : l'appli livrée ne contient plus aucun document d'origine).
+const bundled = path.join(root, 'fixtures', 'bundled');
+const docsMeta = JSON.parse(fs.readFileSync(path.join(bundled, 'data/docs.json'), 'utf8'));
 
 let failures = 0;
 let skipped = 0;
@@ -203,7 +206,7 @@ check('isScanned vide', isScanned([{ text: '' }, { text: 'ab' }]), { scanned: tr
 check('isScanned plein', isScanned([{ text: 'x'.repeat(500) }, { text: 'y'.repeat(400) }]).scanned, false);
 
 // 5. Extraction réelle du C150N + sections comparées à docs.json.
-const c150 = await extractPdfText(path.join(base, 'assets/C150N-final.pdf'));
+const c150 = await extractPdfText(path.join(bundled, 'assets/C150N-final.pdf'));
 check('C150N : 199 pages', c150.numPages, 199);
 check('C150N : page 2 vide (comme l’index fourni)', c150.pages[1].text, '');
 check('C150N : page 3 contient PERFORMANCE', c150.pages[2].text.includes('PERFORMANCE'), true);
@@ -223,7 +226,7 @@ check('C150N : non scanné', isScanned(c150.pages).scanned, false);
 // 5b. Détection en couches (v1.1.3).
 // C150N : pas de signets, sommaire non fiable -> repli titres, sections
 // identiques à docs.json.
-const lay150 = await detectSectionsLayered(path.join(base, 'assets/C150N-final.pdf'), c150.pages);
+const lay150 = await detectSectionsLayered(path.join(bundled, 'assets/C150N-final.pdf'), c150.pages);
 check('couches C150N : source titres', lay150.source, 'heading');
 check('couches C150N : sections = docs.json (pages)',
   lay150.sections.map((s) => s.startPage), ref150.sections.map((s) => s.startPage));
@@ -233,7 +236,7 @@ const layMissing = await detectSectionsLayered(path.join(base, 'assets/n-existe-
 check('couches fichier absent : repli titres', layMissing.source, 'heading');
 // Signets : le C150N n'en a pas.
 const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-const doc150 = await pdfjs.getDocument({ data: new Uint8Array(fs.readFileSync(path.join(base, 'assets/C150N-final.pdf'))), isEvalSupported: false }).promise;
+const doc150 = await pdfjs.getDocument({ data: new Uint8Array(fs.readFileSync(path.join(bundled, 'assets/C150N-final.pdf'))), isEvalSupported: false }).promise;
 check('signets C150N : aucun', await detectOutlineSections(doc150, c150.pages), null);
 // AIM GEN/RAC : signets présents (PDF téléchargés dans /tmp, sinon passé).
 for (const [nom, fichier, cles, pagesDebut] of [
@@ -353,7 +356,7 @@ check('tessdata fra+eng vendu', tess, path.join(base, 'assets', 'tesseract', 'te
 if (process.env.POH_TEST_OCR === '1') {
   try {
     execFileSync('pdftoppm', ['-png', '-r', '200', '-f', '8', '-l', '8',
-      path.join(base, 'assets/C172N-final.pdf'), '/tmp/poh-import-ocr-page'], { stdio: 'ignore' });
+      path.join(bundled, 'assets/C172N-final.pdf'), '/tmp/poh-import-ocr-page'], { stdio: 'ignore' });
     const rendered = fs.readdirSync('/tmp').filter((f) => f.startsWith('poh-import-ocr-page-') && f.endsWith('.png')).sort();
     if (!rendered.length) throw new Error('pdftoppm n’a rien produit');
     const png = fs.readFileSync(path.join('/tmp', rendered[0]));

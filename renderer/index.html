@@ -11,29 +11,32 @@
 <header class="app-header">
   <div class="app-title">
     <h1>Bibliothèque Aviation</h1>
-    <p class="subtitle">POH Cessna 172N · 172R · 150 — SOP C150 · Air Richelieu</p>
   </div>
-  <form id="searchForm" class="search-bar" role="search">
-    <label class="sr-only" for="searchInput">Rechercher dans les POH</label>
-    <input id="searchInput" type="search" placeholder="Ex. : fuel, stall, pression d'huile, décrochage…" autocomplete="off">
-    <label class="sr-only" for="scopeSelect">Documents à chercher</label>
-    <select id="scopeSelect">
-      <option value="all">Tous les documents</option>
-      <option value="c172n">172N seulement</option>
-      <option value="c172r">172R seulement</option>
-      <option value="c150n">150 seulement</option>
-      <option value="sop-c150">SOP seulement</option>
-    </select>
-    <button type="submit" id="searchBtn">Rechercher</button>
-  </form>
   <button type="button" id="aiSettingsBtn" class="header-ai-btn">Réglages IA</button>
-  <p id="searchStatus" class="search-status" aria-live="polite">Tapez un mot ou une expression, puis Rechercher.</p>
 </header>
 
 <main>
   <div class="grid">
-    <!-- Colonne de gauche : documents, sections, résultats -->
+    <!-- Colonne de gauche : portée de recherche, documents, sections -->
     <aside class="left-col" aria-label="Documents et résultats">
+      <div class="search-scope-bar">
+        <span class="scope-label">Rechercher dans</span>
+        <button type="button" class="chip chip-all" id="chipAll" aria-pressed="false">
+          <span class="chip-dot" aria-hidden="true"></span>Tous les documents
+        </button>
+        <span class="scope-note" id="scopeNote">Choisis un document, ou cherche partout.</span>
+      </div>
+
+      <section class="global-search" id="globalSearch" aria-label="Recherche dans tous les documents">
+        <div class="field-row">
+          <label class="sr-only" for="globalInput">Rechercher dans tous les documents</label>
+          <input id="globalInput" class="search-input" type="search" placeholder="Un mot, dans tous les documents…" autocomplete="off">
+        </div>
+        <div class="global-results" id="globalResults"></div>
+      </section>
+
+      <p id="searchStatus" class="search-status" aria-live="polite"></p>
+
       <section class="docs-block" aria-label="Documents">
         <h2>Documents</h2>
         <div id="docCards" class="doc-cards"></div>
@@ -43,29 +46,29 @@
         <h2>Aller à la section</h2>
         <div id="sectionChips" class="section-chips"></div>
       </section>
-
-      <section class="results-block" aria-label="Résultats">
-        <div class="results-nav">
-          <button type="button" id="prevResultBtn">‹ Précédent</button>
-          <span id="resultCounter" class="result-counter">Aucun résultat</span>
-          <button type="button" id="nextResultBtn">Suivant ›</button>
-        </div>
-        <div id="resultsList" class="results-list"></div>
-      </section>
     </aside>
 
     <!-- Lecteur PDF -->
     <section class="reader-panel" aria-label="Lecteur POH">
       <div class="reader-header">
         <div class="reader-title" id="readerTitle">Choisissez un document ou lancez une recherche.</div>
+        <div class="reader-page-nav" aria-label="Navigation dans le document">
+          <div class="sections-menu-wrap">
+            <button type="button" id="sectionsMenuBtn" class="hdr-btn" aria-haspopup="true" aria-expanded="false">Sections ▾</button>
+            <div id="sectionsMenu" class="sections-menu" hidden></div>
+          </div>
+          <button type="button" id="prevPageBtn" class="hdr-btn">‹ Page précédente</button>
+          <span id="pageCounter" class="page-counter">Page — sur —</span>
+          <button type="button" id="nextPageBtn" class="hdr-btn">Page suivante ›</button>
+        </div>
         <div class="view-toggle" role="group" aria-label="Taille d'affichage">
           <button type="button" id="fitBtn">Page entière</button>
           <button type="button" id="largeBtn" class="active">Plus grand</button>
         </div>
       </div>
       <div id="ocrBanner" class="ocr-banner" hidden>
-        ⚠ Texte issu d'un OCR : la recherche sert à <strong>trouver la page</strong>.
-        Les valeurs des tableaux se lisent dans le PDF affiché, jamais dans le texte reconnu.
+        ⚠ Le texte de ce document a été lu automatiquement : la recherche sert à <strong>trouver la page</strong>.
+        Les valeurs des tableaux se lisent dans le PDF affiché, jamais dans le texte lu.
       </div>
       <div id="pdfScroll" class="pdf-scroll">
         <div id="pdfPageWrap" class="pdf-page-wrap">
@@ -74,18 +77,16 @@
           <p id="pdfEmpty" class="pdf-empty">Aucune page affichée pour l'instant.<br>Lancez une recherche ou cliquez sur un document.</p>
         </div>
       </div>
-      <nav class="floating-nav" aria-label="Navigation dans le document">
-        <div class="sections-menu-wrap">
-          <button type="button" id="sectionsMenuBtn" aria-haspopup="true" aria-expanded="false">Sections ▾</button>
-          <div id="sectionsMenu" class="sections-menu" hidden></div>
-        </div>
-        <button type="button" id="prevPageBtn">‹ Page précédente</button>
-        <span id="pageCounter" class="page-counter">Page — sur —</span>
-        <button type="button" id="nextPageBtn">Page suivante ›</button>
-        <span class="zoom-sep" aria-hidden="true"></span>
+      <nav class="floating-nav" aria-label="Zoom et occurrences">
         <button type="button" id="zoomOutBtn" aria-label="Zoom arrière">−</button>
         <span id="zoomLabel" class="zoom-label" aria-live="polite">100 %</span>
         <button type="button" id="zoomInBtn" aria-label="Zoom avant">+</button>
+        <span class="hit-nav" id="hitNav" hidden>
+          <span class="zoom-sep" aria-hidden="true"></span>
+          <button type="button" id="prevHitBtn" aria-label="Occurrence précédente">‹</button>
+          <span id="hitCounter" class="hit-counter" aria-live="polite">—</span>
+          <button type="button" id="nextHitBtn" aria-label="Occurrence suivante">›</button>
+        </span>
       </nav>
     </section>
   </div>
@@ -101,7 +102,6 @@
       </div>
       <div class="tool-card" id="calculatorCard">
         <h3>Calculatrice</h3>
-        <p class="tool-note">Calculatrice générale (pas limitée au centrage).</p>
         <input id="calcDisplay" class="calc-display" type="text" inputmode="decimal" aria-label="Calcul" placeholder="0">
         <div id="calcButtons" class="calc-buttons"></div>
         <p id="calcError" class="calc-error" aria-live="polite"></p>
@@ -126,11 +126,6 @@
     <div id="aiSources" class="ai-sources" hidden></div>
   </section>
 </main>
-
-<footer class="app-footer">
-  <p>Application 100 % locale — aucun réseau, les 4 PDF et l'index sont dans l'application.
-  Recherche en mot entier, insensible à la casse et aux accents, avec synonymes FR ↔ EN.</p>
-</footer>
 
 <script type="module" src="./app.js"></script>
 <script type="module" src="./import.js"></script>

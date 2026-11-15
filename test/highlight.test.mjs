@@ -13,6 +13,9 @@ import {
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const base = path.join(root, '..');
+// Document anciennement fourni, désormais fixture de test uniquement
+// (v1.2.0 : l'appli livrée ne contient plus aucun document d'origine).
+const bundled = path.join(root, 'fixtures', 'bundled');
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -113,7 +116,7 @@ check('texte : phrase coupée -> deux rectangles (un par ligne)',
   [{ x0: 100, y0: 657.6, x1: 535, y1: 672 }, { x0: 100, y0: 637.6, x1: 170, y1: 652 }]);
 
 // 5. Points PDF -> px CSS avec le VRAI viewport pdf.js (rotation 0).
-const data = new Uint8Array(fs.readFileSync(path.join(base, 'assets/C172R-final.pdf')));
+const data = new Uint8Array(fs.readFileSync(path.join(bundled, 'assets/C172R-final.pdf')));
 const doc = await pdfjsLib.getDocument({ data, isEvalSupported: false }).promise;
 const page = await doc.getPage(5);
 const viewport = page.getViewport({ scale: 1 });

@@ -207,7 +207,13 @@ export function mapHttpError(status, endpoint, detail = '') {
 }
 
 // Traduit une erreur réseau (fetch rejeté) en message clair.
-export function mapNetworkError(err, endpoint) {
+// `providerId` (facultatif) : quand il est connu et différent de 'local',
+// le message reste générique (« le fournisseur ») même si l'adresse
+// pointe vers localhost (cas d'un faux serveur ou d'un mandataire) —
+// dire « IA locale » pour un Gemini en échec serait faux. Sans
+// providerId, on garde l'ancien comportement (adresse localhost = IA
+// locale) pour ne pas casser les appelants existants.
+export function mapNetworkError(err, endpoint, providerId) {
   if (err && err.name === 'AbortError') {
     return aiError('La réponse a mis trop de temps à arriver. Réessayez.');
   }
@@ -216,7 +222,7 @@ export function mapNetworkError(err, endpoint) {
   const networkish = code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'EAI_AGAIN'
     || /fetch failed|network|ECONNREFUSED|ENOTFOUND|not reachable/i.test(msg);
   if (networkish) {
-    if (isLocalhostUrl(endpoint)) {
+    if ((providerId === undefined && isLocalhostUrl(endpoint)) || providerId === 'local') {
       return aiError('Impossible de joindre l’IA locale. Vérifiez que le logiciel d’IA locale (Ollama ou LM Studio) est bien lancé, et l’adresse dans « Réglages IA ».');
     }
     return aiError('Impossible de joindre le fournisseur. Vérifiez votre connexion Internet et réessayez.');
@@ -230,6 +236,11 @@ export function mapNetworkError(err, endpoint) {
 // (par défaut 2 s puis 5 s — Google conseille de réessayer quand le
 // modèle est surchargé ; sans nouvelle tentative, un 503 passager
 // ressemble à une panne). `opts.sleepImpl` est injectable pour les tests.
+// `opts.timeoutMs` : durée maximale de l'appel (par défaut 120 s). Le
+// test de connexion utilise une durée courte (20 s) : un test ne doit
+// jamais laisser « Test en cours… » figé des minutes — et il doit rester
+// SOUS la limite de 30 s d'Electron pour un appel IPC (au-delà, l'appel
+// est rejeté avec « reply was never sent » — prouvé par reproduction).
 // Lève une Error avec .userMessage en français clair en cas d'échec.
 export async function callProvider(settings, prompt, fetchImpl = globalThis.fetch, opts = {}) {
   const providerId = settings.provider;
@@ -251,15 +262,16 @@ export async function callProvider(settings, prompt, fetchImpl = globalThis.fetc
   const { url, options } = buildRequest(providerId, { model, endpoint, key: settings.key || '' }, prompt);
   const retryDelays = Array.isArray(opts.retryDelaysMs) ? opts.retryDelaysMs : [2000, 5000];
   const sleepFn = typeof opts.sleepImpl === 'function' ? opts.sleepImpl : ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const timeoutMs = Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0 ? opts.timeoutMs : 120000;
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 120000);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     for (let attempt = 0; ; attempt++) {
       let res;
       try {
         res = await fetchImpl(url, { ...options, signal: ctrl.signal });
       } catch (e) {
-        throw mapNetworkError(e, endpoint);
+        throw mapNetworkError(e, endpoint, providerId);
       }
       if (res.ok) {
         let data;
@@ -288,24 +300,33 @@ export async function callProvider(settings, prompt, fetchImpl = globalThis.fetc
 // Prompt : extraits locaux + consignes. Construit côté rendu (ai.js) à
 // partir des pages retrouvées par le moteur de recherche local, puis envoyé
 // tel quel au fournisseur par le processus principal.
+// Générique (v1.2.0 : l'appli est livrée SANS document fourni — chacun
+// importe les siens) : le prompt ne nomme AUCUN document en particulier.
+// `opts.ocrWarning` : n'ajouter l'avertissement sur les chiffres lus
+// automatiquement que si le contexte vient réellement d'un document lu
+// automatiquement ; sinon, on ne le mentionne pas.
 // ---------------------------------------------------------------------------
-export function buildPrompt(question, pages) {
+export function buildPrompt(question, pages, opts = {}) {
   const lines = [
-    'Tu réponds à une question sur des manuels de vol (POH Cessna 172N, 172R et 150, et SOP C150 d’Air Richelieu). Tu ne dois utiliser QUE les extraits ci-dessous, tirés de ces manuels.',
+    'Tu réponds à une question sur des manuels de vol, à partir des documents chargés dans l’application. Tu ne dois utiliser QUE les extraits ci-dessous, tirés de ces documents.',
     '',
     'Règles :',
     '- Réponds en français, de façon courte et directe.',
-    '- Pour chaque affirmation, cite le document, la section et la page imprimée exacte (exemple : POH Cessna 172N, section 5 — Performances, p. 5-12).',
+    '- Pour chaque affirmation, cite le document, la section et la page imprimée exacte (exemple : Manuel de vol, section 5 — Performances, p. 5-12).',
     '- N’invente jamais une valeur : si l’information n’est pas dans les extraits, dis-le clairement au lieu de deviner.',
-    '- Les chiffres des tableaux du POH 172N viennent d’un OCR : ils peuvent contenir des erreurs. Préviens l’utilisateur de vérifier chaque valeur dans le PDF affiché.',
+  ];
+  if (opts.ocrWarning) {
+    lines.push('- Certains chiffres des tableaux peuvent venir d’une lecture automatique : ils peuvent contenir des erreurs. Préviens l’utilisateur de vérifier chaque valeur dans le document affiché.');
+  }
+  lines.push(
     '- Si les extraits ne permettent pas de répondre, dis-le.',
     '',
     `Question : ${question}`,
     '',
     'Extraits :',
-  ];
+  );
   if (!pages || pages.length === 0) {
-    lines.push('(aucun extrait trouvé dans les manuels pour cette question)');
+    lines.push('(aucun extrait trouvé dans les documents pour cette question)');
   } else {
     for (const p of pages) {
       lines.push(`[${p.docTitle} — ${p.sectionLabel} — ${p.pageLabel}]`);

@@ -7,9 +7,12 @@ import { searchDocs, expandQuery, normalizeForLookup } from '../renderer/search.
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const base = path.join(root, '..');
-const docsMeta = JSON.parse(fs.readFileSync(path.join(base, 'data/docs.json'), 'utf8'));
+// Documents anciennement fournis, désormais fixtures de test uniquement
+// (v1.2.0 : l'appli livrée ne contient plus aucun document d'origine).
+const bundled = path.join(root, 'fixtures', 'bundled');
+const docsMeta = JSON.parse(fs.readFileSync(path.join(bundled, 'data/docs.json'), 'utf8'));
 const synonyms = JSON.parse(fs.readFileSync(path.join(base, 'data/synonyms.json'), 'utf8'));
-const docs = docsMeta.docs.map((d) => JSON.parse(fs.readFileSync(path.join(base, d.index), 'utf8')));
+const docs = docsMeta.docs.map((d) => JSON.parse(fs.readFileSync(path.join(bundled, d.index), 'utf8')));
 const meta = {};
 for (const d of docsMeta.docs) meta[d.id] = d;
 

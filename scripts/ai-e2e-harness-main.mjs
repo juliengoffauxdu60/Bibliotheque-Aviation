@@ -32,6 +32,10 @@ const MIME = {
 };
 
 const results = [];
+// Erreurs non rattrapées du rendu (niveau 3 = erreur console) : le clic
+// sur Tester ne doit plus en produire (anciennement, .blur() après un
+// await levait une TypeError après chaque test réussi).
+const rendererErrors = [];
 function check(name, ok, detail) {
   results.push({ name, ok: !!ok, detail: String(detail ?? '') });
   console.log(`${ok ? 'OK  ' : 'ÉCHEC'} ${name} — ${detail ?? ''}`);
@@ -135,6 +139,34 @@ async function runAll() {
   check('clés par fournisseur : retour sur claude, sa propre clé',
     g.settings.maskedKey.includes('••••9012'), g.settings.maskedKey);
 
+  // 5c. Clic RÉEL sur « Tester la connexion » (régression v1.2.0 : le
+  // bouton restait muet — statut figé sur « Test en cours… » — quand
+  // l'appel IPC rejetait ou que le processus principal ne répondait pas).
+  step('5c', 'clic réel sur Tester la connexion');
+  // Le fournisseur courant est claude (fin de 5b) : revenir sur le faux
+  // serveur custom pour un succès visible.
+  await js(`window.pohDesktop.ai.saveSettings({provider:'custom', model:'modele-factice', endpoint: ${JSON.stringify(MOCK + '/v1/chat/completions')}, key: ${JSON.stringify(FAKE_KEY)}})`);
+  const errorsBeforeButton = rendererErrors.length;
+  const clickTestAndWait = async () => {
+    await js(`document.getElementById('aiTestBtn').click()`);
+    const start = Date.now();
+    for (;;) {
+      const s = await js(`window.__pohAiSettings.state().status`);
+      if (s && s !== 'Test en cours…') return s;
+      if (Date.now() - start > 20000) return s; // figé : le test échoue
+      await sleep(400);
+    }
+  };
+  let buttonStatus = await clickTestAndWait();
+  check('bouton Tester (clic réel) : succès visible', buttonStatus.includes('Connexion OK'), buttonStatus);
+  check('bouton Tester (clic réel) : aucune erreur non rattrapée dans le rendu',
+    rendererErrors.length - errorsBeforeButton === 0, `nouvelles erreurs=${rendererErrors.length - errorsBeforeButton} : ${rendererErrors.slice(errorsBeforeButton).join(' | ')}`);
+  // Échec visible : point de terminaison fermé (connexion refusée).
+  await js(`window.pohDesktop.ai.saveSettings({provider:'custom', model:'modele-factice', endpoint:'http://127.0.0.1:1/v1/chat/completions', key: ${JSON.stringify(FAKE_KEY)}})`);
+  buttonStatus = await clickTestAndWait();
+  check('bouton Tester (clic réel) : échec visible, pas de silence',
+    Boolean(buttonStatus) && !buttonStatus.includes('Test en cours') && buttonStatus.includes('Impossible de joindre'), buttonStatus);
+
   // 6. Ouvrir la fenêtre Réglages depuis le rendu (ai:open-settings).
   step(6, 'ouvrir la fenêtre Réglages');
   await js(`window.pohDesktop.ai.openSettings()`);
@@ -229,6 +261,25 @@ app.whenReady().then(async () => {
       const filePath = path.normalize(path.join(base, rel));
       if (!filePath.startsWith(base)) return new Response('Interdit', { status: 403 });
       if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+        // v1.2.0 : l'appli est livrée sans document fourni — data/docs.json
+        // et data/index/*.json n'existent plus dans le paquet. Le flux
+        // « question » a toujours besoin d'index : le HARNAIS SEUL sert
+        // alors les fixtures de test (test/fixtures/bundled), sans rien
+        // écrire dans l'appli.
+        if (url.host !== 'e2e' && (rel === 'data/docs.json' || rel.startsWith('data/index/'))) {
+          const fixturePath = path.normalize(path.join(ROOT, 'test', 'fixtures', 'bundled', rel));
+          if (fs.existsSync(fixturePath) && fs.statSync(fixturePath).isFile()) {
+            const fixtureBody = fs.readFileSync(fixturePath);
+            return new Response(fixtureBody, {
+              status: 200,
+              headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': String(fixtureBody.length),
+                'Access-Control-Allow-Origin': '*',
+              },
+            });
+          }
+        }
         return new Response('Introuvable : ' + rel, { status: 404 });
       }
       const body = fs.readFileSync(filePath);
@@ -259,6 +310,7 @@ app.whenReady().then(async () => {
     });
     win.webContents.on('console-message', (e, level, message) => {
       console.log(`[rendu:${level}] ${message}`);
+      if (level === 3) rendererErrors.push(message);
     });
     await runAll();
   } catch (e) {

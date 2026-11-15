@@ -33,7 +33,6 @@ const state = {
   pdfDocs: {},   // docId -> PDFDocumentProxy
   pdfPromises: {}, // docId -> promesse getDocument (évite les doubles chargements)
   pdfLoads: {},  // docId -> nombre d'appels getDocument (doit rester à 1)
-  ocrWordsCache: {}, // docId -> { pages: [...] } (boîtes OCR des fournis) ou false (absent)
   ready: null,
 };
 
@@ -69,41 +68,28 @@ function centerCurrentPage() {
 // Chargement des données
 // ---------------------------------------------------------------------------
 async function loadData() {
-  const [docsMeta, synonyms] = await Promise.all([
-    fetch('app://data/docs.json').then((r) => r.json()),
-    fetch('app://data/synonyms.json').then((r) => r.json()),
-  ]);
+  // v1.2.0 : plus aucun document fourni — data/docs.json est absent du
+  // paquet (et du dépôt). Le fetch échoue proprement : liste vide, pas
+  // de plantage. Les documents importés (userData/pohs) restent la
+  // seule source de documents.
+  let docsMeta = { docs: [] };
+  try {
+    const r = await fetch('app://data/docs.json');
+    if (r.ok) {
+      const parsed = await r.json();
+      if (parsed && Array.isArray(parsed.docs)) docsMeta = parsed;
+    }
+  } catch { /* aucun document fourni : on part d'une liste vide */ }
+  const synonyms = await fetch('app://data/synonyms.json').then((r) => r.json());
   state.docsMeta = docsMeta;
   state.synonyms = synonyms;
   const indexes = await Promise.all(
     docsMeta.docs.map((d) => fetch('app://' + d.index).then((r) => r.json())),
   );
   docsMeta.docs.forEach((d, i) => { state.indexes[d.id] = indexes[i]; });
-  // Documents fournis supprimés par l'utilisateur : retirés de la liste
-  // AVANT tout le reste (cartes, recherche, portée) — ils ne sont ni
-  // affichés, ni cherchés, ni chargés. Suppression définitive : aucune
-  // restauration n'est proposée.
-  if (window.pohDesktop && window.pohDesktop.import && window.pohDesktop.import.deletedList) {
-    try {
-      const deleted = await window.pohDesktop.import.deletedList();
-      const deletedIds = new Set((deleted || []).map((h) => h.id));
-      if (deletedIds.size) {
-        docsMeta.docs = docsMeta.docs.filter((d) => !deletedIds.has(d.id));
-        for (const id of deletedIds) delete state.indexes[id];
-        const scope = document.getElementById('scopeSelect');
-        if (scope) {
-          for (const id of deletedIds) {
-            const opt = scope.querySelector(`option[value="${id}"]`);
-            if (opt) opt.remove();
-          }
-          if (scope.value && deletedIds.has(scope.value)) scope.value = 'all';
-        }
-      }
-    } catch { /* liste des supprimés illisible : on garde les 4 fournis */ }
-  }
-  // Documents importés (registre userData/pohs) : même format que les index
-  // fournis, chargés avec eux — c'est LA source unique de vérité pour la
-  // recherche (ordre : les 4 fournis, puis les importés par date d'ajout).
+  // Documents importés (registre userData/pohs) : même format que les
+  // index fournis d'avant la v1.2.0, chargés avec eux — c'est LA source
+  // unique de vérité pour la recherche (ordre : par date d'ajout).
   if (window.pohDesktop && window.pohDesktop.import) {
     const imported = await window.pohDesktop.import.list();
     for (const entry of imported) {
@@ -261,7 +247,7 @@ async function openDocPage(docId, pageNum) {
   state.currentPage = Math.min(Math.max(1, pageNum), meta.totalPages);
   buildSectionChips(docId);
   buildSectionsMenu(docId);
-  updateReaderChrome(); // titre, bannière OCR, puces : à jour même si le rendu échoue
+  updateReaderChrome(); // titre, bannière d'avertissement, puces : à jour même si le rendu échoue
   const res = await renderCurrentPage();
   return { doc: docId, page: state.currentPage, error: res.error, loads: { ...state.pdfLoads } };
 }
@@ -276,8 +262,8 @@ async function openDocPage(docId, pageNum) {
 // surligné est celui du résultat courant (result.termFound), sur toutes
 // ses occurrences de la page affichée — pas seulement la première.
 // Sources, dans l'ordre : le texte réel du PDF (getTextContent, aucun
-// changement d'index), puis les boîtes OCR (index de l'importé, ou
-// fichier userData/ocr-words des fournis). Sans recherche active, rien.
+// changement d'index), puis les boîtes OCR de l'index du document importé
+// (champ ocr_words de la page). Sans recherche active, rien.
 
 function clearHighlights() {
   lastHighlightRects = [];
@@ -325,42 +311,6 @@ function paintHighlightRects(rects) {
   positionHighlightLayer();
 }
 
-// Boîtes OCR des documents fournis (172N) : chargées une fois par
-// document via IPC, puis en cache (y compris l'absence de fichier).
-async function ensureOcrWords(docId) {
-  if (docId in state.ocrWordsCache) return state.ocrWordsCache[docId];
-  let data = false;
-  try {
-    const api = window.pohDesktop && window.pohDesktop.import;
-    if (api && api.getOcrWords) {
-      const res = await api.getOcrWords(docId);
-      if (res && res.ok && res.found && res.data) data = res.data;
-    }
-  } catch { /* pas de boîtes : le lecteur continue sans surlignage OCR */ }
-  state.ocrWordsCache[docId] = data;
-  return data;
-}
-
-// Boîtes OCR de la page courante : index de l'importé d'abord, sinon
-// fichier userData/ocr-words du fourni. Retourne
-// { imageWidth, imageHeight, words } ou null.
-async function ocrWordsForPage(docId, pageNum) {
-  const idx = state.indexes[docId];
-  const entry = idx && idx.pages ? idx.pages[pageNum - 1] : null;
-  if (entry && entry.ocr_words && Array.isArray(entry.ocr_words.words)) {
-    return entry.ocr_words;
-  }
-  const meta = docMeta(docId);
-  if (meta && meta.ocr && meta.pdf && meta.pdf.startsWith('assets/')) {
-    const wordsDoc = await ensureOcrWords(docId);
-    if (wordsDoc && Array.isArray(wordsDoc.pages)) {
-      const pg = wordsDoc.pages.find((p) => p.page === pageNum);
-      if (pg && Array.isArray(pg.words)) return pg;
-    }
-  }
-  return null;
-}
-
 async function updateHighlights(page, viewport) {
   const result = state.currentResult >= 0 ? state.results[state.currentResult] : null;
   const term = result ? result.termFound : null;
@@ -376,11 +326,19 @@ async function updateHighlights(page, viewport) {
       width: typeof it.width === 'number' ? it.width : 0,
       height: typeof it.height === 'number' ? it.height
         : (it.transform ? Math.abs(it.transform[3]) : 10),
+      // Matrice [a, b, c, d, e, f] : porte la rotation du texte — sans
+      // elle, un mot vertical (onglet « RAC » de l'AIM) est surligné par
+      // un rectangle horizontal qui ne le couvre pas (v1.2.0).
+      transform: it.transform ? [...it.transform] : undefined,
     }));
     rectsPdf = textRectsForTerm(items, term);
-    // 2) PDF scanné : boîtes OCR (rien dans le texte réel).
+    // 2) PDF scanné : boîtes OCR, dans l'index du document importé
+    // (champ ocr_words de la page). Sans recherche active, rien.
     if (!rectsPdf.length) {
-      const wordsPage = await ocrWordsForPage(state.currentDoc, state.currentPage);
+      const idx = state.indexes[state.currentDoc];
+      const entry = idx && idx.pages ? idx.pages[state.currentPage - 1] : null;
+      const wordsPage = entry && entry.ocr_words && Array.isArray(entry.ocr_words.words)
+        ? entry.ocr_words : null;
       if (wordsPage) {
         const vp0 = page.getViewport({ scale: 1 });
         rectsPdf = ocrRectsForTerm(
@@ -424,20 +382,62 @@ function highlightInfo() {
 // ---------------------------------------------------------------------------
 // Documents, sections
 // ---------------------------------------------------------------------------
+// Échappement HTML minimal (titres de documents importés affichés
+// dans les cartes).
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// Un document a du texte cherchable si au moins une page de son index
+// contient du texte. Sans texte (document scanné dont la lecture du
+// texte n'a pas été faite), la carte l'indique — c'est le seul
+// avertissement affiché sur une carte (v1.2.0).
+function hasSearchableText(doc) {
+  const idx = state.indexes[doc.id];
+  const pages = idx && Array.isArray(idx.pages) ? idx.pages : [];
+  return pages.some((p) => p && typeof p.text === 'string' && p.text.trim() !== '');
+}
+
 function buildDocCards() {
   const wrap = $('docCards');
   wrap.innerHTML = '';
+  // État vide (v1.2.0, premier lancement sans document importé) : message
+  // clair dans la zone Documents ; le bouton « ＋ Ajouter un document »
+  // (construit par renderer/import.js) reste visible juste en dessous.
+  if (!state.docsMeta.docs.length) {
+    const p = document.createElement('p');
+    p.className = 'docs-empty';
+    p.textContent = 'Aucun document pour l’instant. Ajoutez votre premier document avec le bouton « ＋ Ajouter un document » ci-dessous.';
+    wrap.appendChild(p);
+    return;
+  }
+  // Carte (maquette approuvée) : titre + nombre de pages seulement,
+  // bouton « Rechercher dans le document », champ qui apparaît sur la
+  // carte, badge « Recherche ici » sur la carte active. Le ✕ Supprimer
+  // est ajouté par renderer/import.js. Générique pour CHAQUE document,
+  // importés compris — rien n'est codé en dur pour un document précis.
+  const searchSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor" stroke-width="2.2"/><path d="M15.5 15.5 L21 21" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>';
   for (const doc of state.docsMeta.docs) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'doc-card';
-    b.dataset.doc = doc.id;
-    b.innerHTML = `<span class="doc-name">${doc.title}</span><br>` +
-      `<span class="doc-sub">${doc.subtitle}</span><br>` +
+    const card = document.createElement('article');
+    card.className = 'doc-card';
+    card.dataset.doc = doc.id;
+    card.innerHTML =
+      '<div class="card-top"><span class="search-badge">Recherche ici</span></div>' +
+      `<button type="button" class="doc-title">${esc(doc.title)}</button>` +
       `<span class="doc-pages">${doc.totalPages} pages</span>` +
-      (doc.ocr ? `<br><span class="doc-ocr">Texte par OCR — lire les valeurs dans le PDF</span>` : '');
-    b.addEventListener('click', (e) => { openDocPage(doc.id, 1); e.currentTarget.blur(); });
-    wrap.appendChild(b);
+      (hasSearchableText(doc) ? ''
+        : '<p class="doc-no-text">Pas de texte cherchable : la recherche ne trouvera rien dans ce document, mais vous pouvez le lire dans le lecteur.</p>') +
+      `<button type="button" class="btn-search" data-search="${esc(doc.id)}">${searchSvg}<span>Rechercher dans le document</span></button>` +
+      `<div class="card-search" id="search-${esc(doc.id)}">` +
+        '<div class="field-row">' +
+          `<input class="search-input card-search-input" id="input-${esc(doc.id)}" type="search" placeholder="Un mot dans ${esc(doc.title)}…" autocomplete="off">` +
+          `<button type="button" class="btn-close" data-close="${esc(doc.id)}" aria-label="Fermer la recherche">✕</button>` +
+        '</div>' +
+        `<p class="card-hits" id="hits-${esc(doc.id)}"></p>` +
+      '</div>';
+    wrap.appendChild(card);
   }
 }
 
@@ -475,7 +475,16 @@ function buildSectionsMenu(docId) {
 }
 
 // ---------------------------------------------------------------------------
-// Recherche
+// Recherche (v1.2.0, design approuvé — maquette)
+// Portée : le document de la carte active, ou « tous » via la puce.
+// Plus de menu déroulant, plus de champ dans l'en-tête : la recherche
+// globale vit dans la puce « Tous les documents », la recherche par
+// document dans les cartes. La navigation entre occurrences (flèches +
+// compteur « X sur N ») vit dans le bloc flottant du lecteur, en bas —
+// le gros bloc de résultats de la colonne de gauche est supprimé.
+// (Choix de placement : Julien demande les flèches « en bas du lecteur » ;
+// la maquette les montre en haut du lecteur, dans sa barre de titre —
+// le bloc flottant, en bas, est le placement retenu.)
 // ---------------------------------------------------------------------------
 function orderedIndexes() {
   return state.docsMeta.docs.map((d) => state.indexes[d.id]);
@@ -486,8 +495,118 @@ function metaMap() {
   return m;
 }
 
-async function runSearch(query) {
-  const scope = $('scopeSelect').value;
+// Petit anti-rebond pour la saisie en direct (carte / globale).
+const searchTimers = {};
+function debounce(key, ms, fn) {
+  clearTimeout(searchTimers[key]);
+  searchTimers[key] = setTimeout(fn, ms);
+}
+
+// État de la portée : 'all' | docId | null (aucune recherche active).
+// Met à jour puce, panneau global, badges et champs des cartes.
+function updateSearchScopeUI(openFieldFor) {
+  const scope = state.lastScope;
+  document.querySelectorAll('.doc-card').forEach((card) => {
+    const active = scope !== 'all' && scope !== null && card.dataset.doc === scope;
+    card.classList.toggle('search-active', active);
+    const field = card.querySelector('.card-search');
+    if (field && card.dataset.doc !== openFieldFor) field.classList.remove('open');
+  });
+  $('chipAll').setAttribute('aria-pressed', scope === 'all' ? 'true' : 'false');
+  $('globalSearch').classList.toggle('open', scope === 'all');
+  const note = $('scopeNote');
+  if (scope === 'all') {
+    note.textContent = 'La recherche porte sur tous les documents.';
+  } else if (scope) {
+    const doc = docMeta(scope);
+    note.textContent = doc
+      ? `La recherche porte sur ${doc.title} — c'est la carte marquée « Recherche ici ».`
+      : 'Choisis un document, ou cherche partout.';
+  } else {
+    note.textContent = 'Choisis un document, ou cherche partout.';
+  }
+  if (openFieldFor) {
+    const field = $('search-' + openFieldFor);
+    if (field) field.classList.add('open');
+  }
+}
+
+function setSearchScope(scope, openField) {
+  state.lastScope = scope;
+  updateSearchScopeUI(openField ? scope : null);
+  if (openField) {
+    const input = $('input-' + scope);
+    if (input) setTimeout(() => input.focus(), 60);
+  }
+}
+
+// Passer en global efface la recherche par document en cours : les
+// résultats et le surlignage repartent de zéro.
+function setScopeAll(focusInput) {
+  clearSearchResults();
+  setSearchScope('all', false);
+  renderGlobalResults();
+  if (focusInput) setTimeout(() => $('globalInput').focus(), 60);
+}
+
+// Ouvre le champ de recherche d'une carte et y inscrit la requête
+// (sans voler le focus, sauf demande explicite).
+function revealCardSearch(docId, query, focus) {
+  const input = $('input-' + docId);
+  if (input && typeof query === 'string') input.value = query;
+  const hitsEl = $('hits-' + docId);
+  if (hitsEl) hitsEl.textContent = '';
+  state.lastScope = docId;
+  updateSearchScopeUI(docId);
+  if (focus) {
+    const el = $('input-' + docId);
+    if (el) setTimeout(() => el.focus(), 60);
+  }
+}
+
+function closeCardSearch(docId) {
+  const field = $('search-' + docId);
+  if (field) field.classList.remove('open');
+  const input = $('input-' + docId);
+  if (input) input.value = '';
+  const hitsEl = $('hits-' + docId);
+  if (hitsEl) hitsEl.textContent = '';
+  if (state.lastScope === docId) {
+    state.lastScope = null;
+    updateSearchScopeUI(null);
+    clearSearchResults();
+    $('searchStatus').textContent = '';
+  }
+}
+
+// Ligne « N occurrences — surlignées dans le lecteur. » sous le champ
+// d'une carte (occurrences comptées sur les pages trouvées).
+function updateCardHits(docId) {
+  const hitsEl = $('hits-' + docId);
+  if (!hitsEl) return;
+  const q = (state.lastQuery || '').trim();
+  if (!q) { hitsEl.textContent = ''; return; }
+  const mine = state.results.filter((r) => r.docId === docId);
+  if (!mine.length) {
+    hitsEl.textContent = 'Aucun résultat dans ce document.';
+    return;
+  }
+  const occ = mine.reduce((n, r) => n + r.occurrences, 0);
+  hitsEl.textContent = `${occ} occurrence${occ > 1 ? 's' : ''} — surlignées dans le lecteur.`;
+}
+
+// Efface la recherche en cours : résultats, compteur, surlignage.
+function clearSearchResults() {
+  state.results = [];
+  state.currentResult = -1;
+  state.lastTotal = 0;
+  state.lastQuery = '';
+  updateResultCounter();
+  clearHighlights();
+}
+
+async function runSearch(query, scopeOpt) {
+  const scope = scopeOpt || state.lastScope || 'all';
   const limit = scope === 'all' ? 500 : 1000;
   const { results, total, truncated, terms } = searchDocs(
     orderedIndexes(), metaMap(), query, state.synonyms, { scope, limit },
@@ -498,68 +617,97 @@ async function runSearch(query) {
   state.lastTotal = total;
   state.currentResult = results.length ? 0 : -1;
   const status = total === 0
-    ? `Aucun résultat pour « ${query} ».`
+    ? `Aucun résultat pour « ${query} ». Essayez un autre mot, en français ou en anglais (ex. : décrochage, fuel, volets).`
     : `${total} résultat${total > 1 ? 's' : ''} pour « ${query} »` +
       (terms.length > 1 ? ` (termes cherchés : ${terms.join(', ')})` : '') +
       (truncated ? ` — affichage limité aux ${results.length} premiers.` : '');
   $('searchStatus').textContent = status;
-  renderResults();
+  updateResultCounter();
+  if (scope !== 'all') updateCardHits(scope);
   if (results.length) await openResult(0);
   else clearHighlights(); // sans résultat, aucun surlignage ne doit rester
   return { total, results };
 }
 
-function renderResults() {
-  const list = $('resultsList');
-  list.innerHTML = '';
-  if (!state.results.length) {
-    list.innerHTML = '<p class="results-empty">Aucun résultat. Essayez un autre mot, en français ou en anglais (ex. : décrochage, fuel, volets).</p>';
+// Recherche dans la carte d'un document (saisie en direct).
+async function runCardSearch(docId) {
+  const input = $('input-' + docId);
+  const q = input ? input.value.trim() : '';
+  state.lastScope = docId;
+  updateSearchScopeUI(docId); // badge + champ ouvert, autres fermés
+  if (!q) {
+    clearSearchResults();
+    updateCardHits(docId);
+    $('searchStatus').textContent = '';
+    return { total: 0, results: [] };
   }
-  state.results.forEach((r, i) => {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'result-card' + (i === state.currentResult ? ' current' : '');
-    b.dataset.index = String(i);
-    const pageLabel = r.printedLabel ? `p. ${r.printedLabel}` : `page PDF ${r.page}`;
-    const synNote = r.termFound !== state.lastQuery.trim().toLowerCase() &&
-      r.termFound.toLowerCase() !== state.lastQuery.trim().toLowerCase()
-      ? ` <span class="syn">(synonyme de « ${state.lastQuery.trim()} »)</span>` : '';
-    b.innerHTML =
-      `<span class="result-head"><span class="doc">${r.docTitle}</span><span class="page">${pageLabel}</span></span>` +
-      `<span class="result-section">${r.sectionLabel}</span>` +
-      `<span class="result-found">Trouvé : <span class="term">« ${r.termFound} »</span> — ${r.occurrences} occurrence${r.occurrences > 1 ? 's' : ''} sur cette page${synNote}</span>` +
-      `<span class="result-excerpt">${r.excerptHtml}</span>`;
-    b.addEventListener('click', (e) => { openResult(i); e.currentTarget.blur(); });
-    list.appendChild(b);
-  });
-  updateResultCounter();
+  return runSearch(q, docId);
 }
 
+// Recherche globale (puce « Tous les documents ») : occurrences par
+// document ; un clic sur une ligne ouvre la bonne carte, avec la
+// requête reprise dans son champ.
+function renderGlobalResults() {
+  const list = $('globalResults');
+  const q = $('globalInput').value.trim();
+  list.innerHTML = '';
+  if (!q) return;
+  const { results } = searchDocs(
+    orderedIndexes(), metaMap(), q, state.synonyms, { scope: 'all', limit: 1000 },
+  );
+  const byDoc = new Map();
+  for (const r of results) {
+    const entry = byDoc.get(r.docId) || { title: r.docTitle, occ: 0 };
+    entry.occ += r.occurrences;
+    byDoc.set(r.docId, entry);
+  }
+  if (!byDoc.size) {
+    const p = document.createElement('p');
+    p.className = 'global-empty';
+    p.textContent = 'Aucun résultat dans les documents.';
+    list.appendChild(p);
+    return;
+  }
+  for (const [docId, entry] of byDoc) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'global-hit';
+    b.dataset.doc = docId;
+    b.innerHTML = `<span>${esc(entry.title)}</span><span class="n">${entry.occ} occurrence${entry.occ > 1 ? 's' : ''}</span>`;
+    b.addEventListener('click', (e) => {
+      revealCardSearch(docId, q, true);
+      runSearch(q, docId);
+      e.currentTarget.blur();
+    });
+    list.appendChild(b);
+  }
+}
+
+// Compteur des occurrences, dans le bloc flottant du lecteur :
+// « X sur N » (N = pages contenant le terme), « 0 résultat »,
+// « — » quand aucune recherche n'est en cours.
 function updateResultCounter() {
   const n = state.lastTotal;
-  $('resultCounter').textContent = n === 0
-    ? 'Aucun résultat'
-    : `Résultat ${state.currentResult + 1} sur ${n}`;
-  $('prevResultBtn').disabled = state.currentResult <= 0;
-  $('nextResultBtn').disabled = state.currentResult < 0 || state.currentResult >= n - 1;
+  const counter = $('hitCounter');
+  if (counter) {
+    counter.textContent = !state.lastQuery ? '—'
+      : n === 0 ? '0 résultat'
+      : `${state.currentResult + 1} sur ${n}`;
+  }
+  // La barre d'occurrences n'apparaît QUE pendant une recherche active.
+  const hitNav = $('hitNav');
+  if (hitNav) hitNav.hidden = !state.lastQuery;
+  $('prevHitBtn').disabled = state.currentResult <= 0;
+  $('nextHitBtn').disabled = state.currentResult < 0 || state.currentResult >= n - 1;
 }
 
 async function openResult(i) {
   if (i < 0 || i >= state.results.length) return null;
   state.currentResult = i;
   const r = state.results[i];
-  document.querySelectorAll('.result-card').forEach((el) => {
-    el.classList.toggle('current', Number(el.dataset.index) === i);
-  });
-  const card = document.querySelector(`.result-card[data-index="${i}"]`);
-  if (card) {
-    // Défilement limité à la liste des résultats : la page elle-même ne bouge pas.
-    const list = $('resultsList');
-    const listRect = list.getBoundingClientRect();
-    const cardRect = card.getBoundingClientRect();
-    if (cardRect.top < listRect.top) list.scrollTop -= (listRect.top - cardRect.top);
-    else if (cardRect.bottom > listRect.bottom) list.scrollTop += (cardRect.bottom - listRect.bottom);
-  }
+  // En recherche globale, ouvrir un résultat bascule la recherche sur
+  // son document : badge + champ de la carte, requête reprise.
+  if (state.lastScope === 'all') revealCardSearch(r.docId, state.lastQuery, false);
   updateResultCounter();
   const res = await openDocPage(r.docId, r.page);
   return { doc: res.doc, page: res.page, error: res.error, loads: res.loads };
@@ -644,16 +792,69 @@ function nonBlankPixels() {
 // Démarrage + API d'auto-test
 // ---------------------------------------------------------------------------
 function bindEvents() {
-  $('searchForm').addEventListener('submit', (e) => {
-    e.preventDefault();
-    const q = $('searchInput').value.trim();
-    if (q) runSearch(q);
+  // Puce « Tous les documents » : bascule vers la recherche globale,
+  // ou revient à la recherche par document en cours.
+  $('chipAll').addEventListener('click', (e) => {
+    if (state.lastScope === 'all') {
+      // Retour : aucune recherche active (le badge « Recherche ici »
+      // ne marque que la carte où une recherche est en cours).
+      state.lastScope = null;
+      updateSearchScopeUI(null);
+    } else {
+      setScopeAll(true);
+    }
+    e.currentTarget.blur();
   });
-  $('prevResultBtn').addEventListener('click', (e) => {
+  // Recherche globale : saisie en direct, occurrences par document.
+  $('globalInput').addEventListener('input', () => {
+    debounce('global', 200, renderGlobalResults);
+  });
+  $('globalInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const q = e.target.value.trim();
+      if (q) renderGlobalResults();
+    }
+  });
+  // Cartes : bouton = ouvrir sa recherche ; TOUTE la carte = ouvrir le
+  // document en lecture, sans recherche ; ✕ = fermer sa recherche.
+  // Délégation : les cartes sont reconstruites à chaque chargement des
+  // données. Le clic sur le bouton de recherche ne déclenche pas
+  // l'ouverture simple (retour immédiat), et le clic dans le champ de
+  // recherche de la carte ne l'ouvre pas non plus.
+  $('docCards').addEventListener('click', (e) => {
+    const searchBtn = e.target.closest('[data-search]');
+    if (searchBtn) {
+      const docId = searchBtn.dataset.search;
+      setSearchScope(docId, true);
+      if (state.currentDoc !== docId) openDocPage(docId, 1);
+      else updateReaderChrome();
+      return;
+    }
+    const closeBtn = e.target.closest('[data-close]');
+    if (closeBtn) { closeCardSearch(closeBtn.dataset.close); return; }
+    // Clics dans le champ de recherche de la carte ou sur le ✕ Supprimer
+    // ne doivent pas ouvrir le document.
+    if (e.target.closest('.card-search') || e.target.closest('.doc-delete')) return;
+    const card = e.target.closest('.doc-card');
+    if (card) {
+      // Clic sur TOUTE la carte = ouvrir en lecture, sans recherche :
+      // la recherche en cours (portée, badge, champ) n'est pas touchée.
+      openDocPage(card.dataset.doc, 1);
+    }
+  });
+  // Saisie en direct dans le champ d'une carte.
+  $('docCards').addEventListener('input', (e) => {
+    if (!e.target.classList || !e.target.classList.contains('card-search-input')) return;
+    const docId = e.target.id.replace('input-', '');
+    debounce('card-' + docId, 250, () => runCardSearch(docId));
+  });
+  // Navigation entre occurrences, dans le bloc flottant du lecteur.
+  $('prevHitBtn').addEventListener('click', (e) => {
     if (state.currentResult > 0) openResult(state.currentResult - 1);
     e.currentTarget.blur();
   });
-  $('nextResultBtn').addEventListener('click', (e) => {
+  $('nextHitBtn').addEventListener('click', (e) => {
     if (state.currentResult >= 0 && state.currentResult < state.results.length - 1) openResult(state.currentResult + 1);
     e.currentTarget.blur();
   });
@@ -675,9 +876,6 @@ function bindEvents() {
       menu.hidden = true;
       $('sectionsMenuBtn').setAttribute('aria-expanded', 'false');
     }
-  });
-  $('searchInput').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); const q = e.target.value.trim(); if (q) runSearch(q); }
   });
   // Recentrage si la zone de lecture change de taille après le rendu
   // (redimensionnement de la fenêtre, en-tête du lecteur qui passe à deux
@@ -735,19 +933,19 @@ state.ready = (async () => {
   buildDocCards();
   initTools();
   bindEvents();
+  updateResultCounter(); // flèches d'occurrences désactivées, compteur « — »
   updateReaderChromeSafe();
-  // Document par défaut : le premier document visible (172N d'habitude ;
-  // si l'utilisateur l'a supprimé, c'est le suivant). Aucun document :
+  // Document par défaut : le premier document visible. Aucun document :
   // le lecteur reste sur son message vide.
   const firstDoc = state.docsMeta.docs[0];
   if (firstDoc) await openDocPage(firstDoc.id, 1);
 })();
 
 // Chevauchement de la colonne de gauche sur les outils (auto-test) :
-// la grille a une hauteur fixe ; si les cartes + puces de sections +
-// navigation des résultats dépassent son bas, elles peignent par-dessus
-// la section « Outils » qui suit. Le correctif (.left-col défilante)
-// fait défiler la colonne dans la grille au lieu de déborder.
+// la grille a une hauteur fixe ; si les cartes + puces de sections
+// dépassent son bas, elles peignent par-dessus la section « Outils »
+// qui suit. Le correctif (.left-col défilante) fait défiler la colonne
+// dans la grille au lieu de déborder.
 // Mesure : on compare les rects VISIBLES (intersection avec la boîte
 // de la colonne — getBoundingClientRect seul ne distingue pas un contenu
 // rogné par le défilement d'un contenu qui peint par-dessus les outils).
@@ -755,9 +953,8 @@ function layoutOverlapInfo() {
   const grid = document.querySelector('.grid');
   const leftCol = document.querySelector('.left-col');
   const sections = document.querySelector('.sections-block');
-  const nav = document.querySelector('.results-nav');
   const tools = document.querySelector('section.tools');
-  if (!grid || !leftCol || !sections || !nav || !tools) return JSON.stringify({ error: 'éléments introuvables' });
+  if (!grid || !leftCol || !sections || !tools) return JSON.stringify({ error: 'éléments introuvables' });
   const r = (el) => el.getBoundingClientRect();
   const inter = (a, b) => {
     const x0 = Math.max(a.left, b.left), y0 = Math.max(a.top, b.top);
@@ -772,13 +969,11 @@ function layoutOverlapInfo() {
   // visible), c'est le rectangle entier — qui peut atteindre les outils.
   const clips = getComputedStyle(leftCol).overflowY !== 'visible';
   const visSections = clips ? inter(r(sections), col) : r(sections);
-  const visNav = clips ? inter(r(nav), col) : r(nav);
   const info = {
     gridBottom: Math.round(r(grid).bottom),
     sectionsBottom: Math.round(r(sections).bottom),
-    resultsNavBottom: Math.round(r(nav).bottom),
     leftColScrolls: leftCol.scrollHeight > leftCol.clientHeight + 1,
-    overlap: hits(visSections, toolsH2) || hits(visNav, toolsH2),
+    overlap: hits(visSections, toolsH2),
   };
   return JSON.stringify(info);
 }
@@ -790,7 +985,31 @@ window.__poh = {
     docsLoaded: Object.keys(state.indexes).length,
     totalPages: state.docsMeta.docs.reduce((n, d) => n + d.totalPages, 0),
   }),
-  search: (q) => runSearch(q),
+  search: (q) => {
+    // Entrée programmatique (auto-test) : recherche globale, comme si
+    // la puce « Tous les documents » avait été activée puis le mot tapé.
+    setScopeAll(false);
+    $('globalInput').value = q;
+    renderGlobalResults();
+    return runSearch(q, 'all');
+  },
+  // Ouvre la recherche de la carte d'un document, avec la requête
+  // reprise dans son champ (équivalent du clic sur son bouton).
+  openCardSearch: async (docId, q) => {
+    revealCardSearch(docId, q || '', true);
+    if (state.currentDoc !== docId) await openDocPage(docId, 1);
+    if (q && q.trim()) return runSearch(q.trim(), docId);
+    return { total: 0, results: [] };
+  },
+  // État de la recherche pour l'auto-test (portée, puce, badge, champs).
+  scopeInfo: () => JSON.stringify({
+    scope: state.lastScope,
+    chipPressed: $('chipAll').getAttribute('aria-pressed'),
+    globalOpen: $('globalSearch').classList.contains('open'),
+    badgeDoc: (() => { const el = document.querySelector('.doc-card.search-active'); return el ? el.dataset.doc : null; })(),
+    cardFieldOpen: (() => { const el = document.querySelector('.card-search.open'); return el ? el.id : null; })(),
+    hitCounter: $('hitCounter').textContent,
+  }),
   openResult: (i) => openResult(i),
   goToPage: (n) => openDocPage(state.currentDoc, n),
   goToSection: (key) => {
@@ -810,11 +1029,11 @@ window.__poh = {
   prevPage: () => openDocPage(state.currentDoc, state.currentPage - 1),
   nextResult: async () => {
     if (state.currentResult < state.results.length - 1) await openResult(state.currentResult + 1);
-    return $('resultCounter').textContent;
+    return $('hitCounter').textContent;
   },
   prevResult: async () => {
     if (state.currentResult > 0) await openResult(state.currentResult - 1);
-    return $('resultCounter').textContent;
+    return $('hitCounter').textContent;
   },
   centeringInfo,
   floatingNavInfo,

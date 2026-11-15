@@ -14,11 +14,7 @@ contextBridge.exposeInMainWorld('pohDesktop', {
     ocrPage: (docId, pdfPage, pngBase64, imageWidth, imageHeight) => ipcRenderer.invoke('poh-import:ocr-page', { docId, pdfPage, pngBase64, imageWidth, imageHeight }),
     ocrFinish: (docId) => ipcRenderer.invoke('poh-import:ocr-finish', { docId }),
     ocrCancel: (docId) => ipcRenderer.invoke('poh-import:ocr-cancel', { docId }),
-    ocrWordsPage: (docId, pdfPage, pngBase64, imageWidth, imageHeight) => ipcRenderer.invoke('poh-import:ocr-words-page', { docId, pdfPage, pngBase64, imageWidth, imageHeight }),
-    ocrWordsFinish: (docId, totalPages) => ipcRenderer.invoke('poh-import:ocr-words-finish', { docId, totalPages }),
-    getOcrWords: (docId) => ipcRenderer.invoke('poh-import:ocr-words-get', { docId }),
     deleteDoc: (docId) => ipcRenderer.invoke('poh-import:delete', { docId }),
-    deletedList: () => ipcRenderer.invoke('poh-import:deleted-list'),
   },
   ai: {
     getSettings: () => ipcRenderer.invoke('ai:get-settings'),

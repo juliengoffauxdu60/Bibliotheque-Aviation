@@ -5,7 +5,8 @@
 //  1. la question est découpée en termes, retrouvés dans les index LOCAUX
 //     par le moteur de recherche existant (renderer/ai-retrieve.js, qui
 //     réutilise searchDocs) — même liste de documents que la recherche
-//     (data/docs.json : fournis + importés) ;
+//     (documents importés par l'utilisateur ; plus aucun document fourni
+//     depuis la v1.2.0) ;
 //  2. le prompt (extraits + consignes : français, citations exactes,
 //     jamais inventer, avertissement OCR 172N) est construit par
 //     renderer/ai-providers.js ;
@@ -26,10 +27,20 @@ let asking = false;
 function loadIndexes() {
   if (!indexesPromise) {
     indexesPromise = (async () => {
-      const [docsMeta, synonyms] = await Promise.all([
-        fetch('app://data/docs.json').then((r) => r.json()),
-        fetch('app://data/synonyms.json').then((r) => r.json()),
-      ]);
+      // v1.2.0 : plus aucun document fourni — data/docs.json est absent
+      // du paquet. Le fetch échoue proprement : liste vide, pas de
+      // plantage ; les documents importés restent cherchables. Avec
+      // zéro document, retrieveContext ne trouve aucun passage et la
+      // zone affiche « aucun passage trouvé ».
+      let docsMeta = { docs: [] };
+      try {
+        const r = await fetch('app://data/docs.json');
+        if (r.ok) {
+          const parsed = await r.json();
+          if (parsed && Array.isArray(parsed.docs)) docsMeta = parsed;
+        }
+      } catch { /* aucun document fourni : on part d'une liste vide */ }
+      const synonyms = await fetch('app://data/synonyms.json').then((r) => r.json());
       const indexes = await Promise.all(
         docsMeta.docs.map((d) => fetch('app://' + d.index).then((r) => r.json())),
       );

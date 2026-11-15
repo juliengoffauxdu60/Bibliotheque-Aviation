@@ -282,6 +282,15 @@ export function registerAiHandlers() {
       }
       const entry = stored.providers[stored.provider] || emptyEntry();
       // Usage réel : le déchiffrement a lieu ici (voir ai:ask).
+      // Attention : safeStorage.decryptString est synchrone et, sur macOS,
+      // peut attendre l'invite du trousseau — aucun délai ne peut le
+      // borner ici. Deux bornes protègent quand même l'utilisateur :
+      //  - l'appel réseau ci-dessous (20 s) : il reste SOUS la limite de
+      //    30 s d'Electron pour un appel IPC (au-delà, l'appel est rejeté
+      //    avec « reply was never sent » — prouvé par reproduction) ;
+      //  - côté rendu, le bouton Tester a son propre délai (45 s, filet de
+      //    sécurité) et traduit « reply was never sent » en message clair
+      //    qui mentionne le trousseau.
       const key = decryptKeyEntry(entry);
       refreshMaskedKey(stored, key);
       const answer = await callProvider({
@@ -289,7 +298,7 @@ export function registerAiHandlers() {
         model: entry.model || def.defaultModel,
         endpoint: entry.endpoint || def.defaultEndpoint,
         key,
-      }, 'Réponds uniquement par le mot OK.');
+      }, 'Réponds uniquement par le mot OK.', undefined, { timeoutMs: 20000 });
       return { ok: true, answer: answer.slice(0, 200) };
     } catch (e) {
       return { ok: false, error: (e && e.userMessage) || 'Le test a échoué. Réessayez.' };

@@ -1,5 +1,8 @@
 // Tests IA (Node, sans Electron) : logique pure des fournisseurs, du prompt
-// et de la récupération du contexte — contre les VRAIS index JSON.
+// et de la récupération du contexte — contre les index JSON des documents
+// anciennement fournis, désormais fixtures de test uniquement (v1.2.0 :
+// l'appli livrée ne contient plus aucun document d'origine — même motif
+// que test/search.test.mjs).
 // Usage : node test/ai.test.mjs
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,9 +16,10 @@ import { buildTermRegex } from '../renderer/search.js';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const base = path.join(root, '..');
-const docsMeta = JSON.parse(fs.readFileSync(path.join(base, 'data/docs.json'), 'utf8'));
+const bundled = path.join(root, 'fixtures', 'bundled');
+const docsMeta = JSON.parse(fs.readFileSync(path.join(bundled, 'data/docs.json'), 'utf8'));
 const synonyms = JSON.parse(fs.readFileSync(path.join(base, 'data/synonyms.json'), 'utf8'));
-const docs = docsMeta.docs.map((d) => JSON.parse(fs.readFileSync(path.join(base, d.index), 'utf8')));
+const docs = docsMeta.docs.map((d) => JSON.parse(fs.readFileSync(path.join(bundled, d.index), 'utf8')));
 const meta = {};
 for (const d of docsMeta.docs) meta[d.id] = d;
 
@@ -152,7 +156,8 @@ const spyFetch = fakeFetch(async (url) => { calledUrl = url; return { ok: true, 
 await callProvider({ provider: 'custom', model: 'm', endpoint: 'http://localhost:9/v1/chat/completions', key: 'K' }, promptTest, spyFetch);
 check('callProvider custom : appel vers le point configuré, pas ailleurs', calledUrl, 'http://localhost:9/v1/chat/completions');
 
-// 7. Prompt : consignes en français, avertissement OCR, pas d'invention.
+// 7. Prompt : générique (v1.2.0, sans document fourni), consignes en
+// français, avertissement OCR seulement si demandé, pas d'invention.
 const pagesExemple = [
   { docTitle: 'POH Cessna 172N', sectionLabel: 'Section 5 — Performances', pageLabel: 'p. 5-12', excerpt: 'La vitesse de décrochage est de 48 kt.' },
 ];
@@ -160,7 +165,17 @@ const prompt = buildPrompt('Quelle est la vitesse de décrochage ?', pagesExempl
 check('prompt : question reprise', prompt.includes('Quelle est la vitesse de décrochage ?'), true);
 check('prompt : extrait + référence exacte', prompt.includes('[POH Cessna 172N — Section 5 — Performances — p. 5-12]') && prompt.includes('48 kt'), true);
 check('prompt : consigne ne jamais inventer', prompt.includes('N’invente jamais une valeur'), true);
-check('prompt : avertissement OCR 172N', prompt.includes('OCR'), true);
+// v1.2.0 : l'appli est livrée sans document fourni — le prompt est
+// générique (aucun POH nommé dans les consignes) et l'avertissement sur
+// les chiffres lus automatiquement n'apparaît que si on le demande
+// explicitement. (Les extraits eux-mêmes citent leur vrai document —
+// c'est normal : on vérifie les CONSIGNES, donc un prompt sans extrait.)
+const promptSansExtrait = buildPrompt('Quelle est la vitesse de décrochage ?', []);
+check('prompt : générique, aucun document nommé', !promptSansExtrait.includes('172N') && !promptSansExtrait.includes('172R') && !promptSansExtrait.includes('SOP') && !promptSansExtrait.includes('Air Richelieu') && promptSansExtrait.includes('documents chargés dans l’application'), true);
+check('prompt : pas d’avertissement OCR par défaut', promptSansExtrait.includes('OCR') || promptSansExtrait.includes('lecture automatique'), false);
+const promptOcr = buildPrompt('Quelle est la vitesse de décrochage ?', [], { ocrWarning: true });
+check('prompt : avertissement OCR seulement si demandé', promptOcr.includes('lecture automatique') && promptOcr.includes('vérifier chaque valeur'), true);
+check('prompt : avertissement OCR générique, sans 172N', promptOcr.includes('172N'), false);
 check('prompt : réponse en français', prompt.includes('Réponds en français'), true);
 check('prompt : citation document/section/page', prompt.includes('cite le document, la section et la page imprimée exacte'), true);
 
@@ -292,6 +307,53 @@ check('sauvegarde : fournisseur inconnu refusé', res.ok, false);
 await callIpc('ai:save-settings', { provider: 'gemini', model: '', endpoint: '', key: '' });
 res = await callIpc('ai:get-settings');
 check('modèle/endpoint vides : défauts du fournisseur affichés', [res.settings.model, res.settings.endpoint], ['gemini-3.8-flash', PROVIDERS.gemini.defaultEndpoint]);
+
+// 11. Régression — bug « Tester la connexion » muet (v1.2.0, 14 nov.) :
+// le clic sur Tester ne donnait ni succès ni erreur quand l'appel IPC
+// rejetait ou quand le processus principal ne répondait pas (invite du
+// trousseau macOS qui bloque le déchiffrement) — le statut restait figé
+// sur « Test en cours… ». Les bornes : appel réseau du test limité à
+// 20 s côté principal (opts.timeoutMs, sous la limite IPC de 30 s),
+// délai de 45 s côté rendu (filet de sécurité).
+
+// 11a. Un fetch qui ne répond jamais est interrompu par timeoutMs.
+const hangingFetch = fakeFetch((_url, options) => new Promise((_resolve, reject) => {
+  const signal = options && options.signal;
+  const onAbort = () => { const e = new Error('abandon'); e.name = 'AbortError'; reject(e); };
+  if (!signal) return; // sans signal : ne répond jamais
+  if (signal.aborted) { onAbort(); return; }
+  signal.addEventListener('abort', onAbort);
+}));
+const t0Hang = Date.now();
+await checkThrows('régression test muet : fetch qui ne répond jamais -> délai dépassé (timeoutMs)',
+  () => callProvider({ provider: 'openai', model: 'gpt-4o-mini', endpoint: PROVIDERS.openai.defaultEndpoint, key: 'CLE-FAUSSE' }, promptTest, hangingFetch, { timeoutMs: 50 }),
+  'La réponse a mis trop de temps à arriver. Réessayez.');
+check('régression test muet : délai dépassé en moins de 5 s', Date.now() - t0Hang < 5000, true);
+
+// 11b. Erreur réseau : le message « IA locale » ne sort que pour une IA
+// locale — un Gemini (même via un faux serveur sur localhost) dit
+// « le fournisseur », sinon l'utilisateur cherche une IA locale qu'il
+// n'a pas.
+check('régression test muet : gemini sur localhost -> pas « IA locale »',
+  mapNetworkError(refused, 'http://127.0.0.1:9/v1beta/models/x:generateContent', 'gemini').userMessage.includes('IA locale'), false);
+check('régression test muet : gemini sur localhost -> message fournisseur',
+  mapNetworkError(refused, 'http://127.0.0.1:9/v1beta/models/x:generateContent', 'gemini').userMessage.includes('joindre le fournisseur'), true);
+check('régression test muet : local sans fournisseur -> message IA locale (compatibilité)',
+  mapNetworkError(refused, 'http://localhost:11434/v1/chat/completions').userMessage.includes('IA locale'), true);
+check('régression test muet : fournisseur local -> message IA locale',
+  mapNetworkError(refused, 'http://localhost:11434/v1/chat/completions', 'local').userMessage.includes('IA locale'), true);
+
+// 11c. ai:test renvoie TOUJOURS {ok:true} ou {ok:false, error} avec un
+// message lisible — jamais undefined, jamais d'exception (le bouton
+// Tester ne doit jamais rester muet).
+globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: 'OK' }] } }] }) });
+res = await callIpc('ai:test');
+check('régression test muet : ai:test renvoie {ok:true} (succès)', res.ok, true);
+check('régression test muet : ai:test renvoie une réponse, pas undefined', typeof res.answer, 'string');
+globalThis.fetch = realFetchForSection10;
+await callIpc('ai:clear-key');
+res = await callIpc('ai:test');
+check('régression test muet : ai:test sans clé -> {ok:false} avec message lisible', [res.ok, typeof res.error === 'string' && res.error.includes('clé')], [false, true]);
 
 // Nettoyage du dossier temporaire du faux Electron.
 fs.rmSync(electronStub.userDataDir, { recursive: true, force: true });

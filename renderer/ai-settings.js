@@ -7,6 +7,47 @@ const $ = (id) => document.getElementById(id);
 
 let providers = [];
 let current = null;
+let testing = false;
+
+// Délais (le test réseau côté principal est borné à 20 s — voir
+// main-ai.js — donc 45 s côté rendu laisse une marge sans jamais laisser
+// « Test en cours… » figé si le processus principal ne répond pas, par
+// exemple quand l'invite du trousseau macOS bloque le déchiffrement de
+// la clé derrière la fenêtre ; Electron lui-même rejette un appel IPC
+// sans réponse au bout de 30 s — « reply was never sent », prouvé par
+// reproduction — et ce rejet est traduit ci-dessous en message clair).
+const TEST_TIMEOUT_MS = 45000;
+const SAVE_TIMEOUT_MS = 30000;
+const LOAD_TIMEOUT_MS = 15000;
+const API_ABSENT_MESSAGE = 'La fonction IA n’est pas branchée dans cette application (le préchargeur ne l’expose pas).';
+const TEST_TIMEOUT_MESSAGE = 'Le test n’a pas répondu à temps. Si une fenêtre du trousseau (macOS) est apparue derrière l’application, autorisez-la puis réessayez. Sinon, vérifiez votre connexion et réessayez.';
+const SAVE_TIMEOUT_MESSAGE = 'L’enregistrement n’a pas répondu à temps. Réessayez.';
+const CLEAR_TIMEOUT_MESSAGE = 'La suppression de la clé n’a pas répondu à temps. Réessayez.';
+
+// Une promesse IPC qui ne répond jamais (processus principal bloqué,
+// canal absent) ne doit JAMAIS laisser la page muette : au bout du délai,
+// on rejette avec un message clair. L'erreur porte .isTimeout : les
+// autres rejets (erreur IPC technique, par exemple) sont traduits en
+// message simple côté appelant, jamais affichés tels quels.
+function withTimeout(promise, ms, message) {
+  let timer = null;
+  const timeout = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => {
+      const e = new Error(message);
+      e.isTimeout = true;
+      reject(e);
+    }, ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+// Electron rejette un appel IPC sans réponse au bout de 30 s avec
+// « reply was never sent » (processus principal bloqué — typiquement
+// l'invite du trousseau macOS pendant le déchiffrement) : c'est un
+// dépassement de délai, pas une erreur technique à afficher telle quelle.
+function isNoReply(err) {
+  return Boolean(err && /reply was never sent/i.test(err.message || ''));
+}
 
 function aiApi() {
   return window.pohDesktop && window.pohDesktop.ai ? window.pohDesktop.ai : null;
@@ -14,6 +55,7 @@ function aiApi() {
 
 function setStatus(text, isError) {
   const el = $('aiSettingsStatus');
+  if (!el) return;
   el.textContent = text || '';
   el.classList.toggle('ai-error', Boolean(isError));
 }
@@ -46,12 +88,18 @@ function fillProviderDefaults(id, { force = false } = {}) {
 async function refresh() {
   const api = aiApi();
   if (!api) {
-    setStatus('La fonction IA n’est pas branchée dans cette application (le préchargeur ne l’expose pas).', true);
+    setStatus(API_ABSENT_MESSAGE, true);
     return;
   }
-  const res = await api.getSettings();
-  if (!res.ok) {
-    setStatus(res.error || 'Impossible de lire les réglages IA.', true);
+  let res;
+  try {
+    res = await withTimeout(api.getSettings(), LOAD_TIMEOUT_MS, 'Impossible de lire les réglages IA.');
+  } catch (e) {
+    setStatus('Impossible de lire les réglages IA.', true);
+    return;
+  }
+  if (!res || !res.ok) {
+    setStatus((res && res.error) || 'Impossible de lire les réglages IA.', true);
     return;
   }
   current = res.settings;
@@ -88,16 +136,25 @@ function bind() {
   $('aiSettingsForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const api = aiApi();
-    if (!api) return;
+    if (!api) {
+      setStatus(API_ABSENT_MESSAGE, true);
+      return;
+    }
     setStatus('Enregistrement…');
-    const res = await api.saveSettings({
-      provider: $('aiProvider').value,
-      model: $('aiModel').value.trim(),
-      endpoint: $('aiEndpoint').value.trim(),
-      key: $('aiKey').value.trim(),
-    });
-    if (!res.ok) {
-      setStatus(res.error || 'Enregistrement impossible.', true);
+    let res;
+    try {
+      res = await withTimeout(api.saveSettings({
+        provider: $('aiProvider').value,
+        model: $('aiModel').value.trim(),
+        endpoint: $('aiEndpoint').value.trim(),
+        key: $('aiKey').value.trim(),
+      }), SAVE_TIMEOUT_MS, SAVE_TIMEOUT_MESSAGE);
+    } catch (err) {
+      setStatus((err && (err.isTimeout || isNoReply(err))) ? SAVE_TIMEOUT_MESSAGE : 'Enregistrement impossible.', true);
+      return;
+    }
+    if (!res || !res.ok) {
+      setStatus((res && res.error) || 'Enregistrement impossible.', true);
       return;
     }
     current = res.settings;
@@ -109,35 +166,66 @@ function bind() {
     setStatus('Réglages enregistrés.');
   });
   $('aiTestBtn').addEventListener('click', async (e) => {
+    // Le bouton est capturé AVANT toute attente : après un await,
+    // e.currentTarget vaut null (événement recyclé) et .blur() levait une
+    // erreur non rattrapée après chaque test réussi.
+    const btn = e.currentTarget;
     const api = aiApi();
-    if (!api) return;
-    setStatus('Test en cours…');
-    const res = await api.test();
-    if (!res.ok) {
-      setStatus(res.error || 'Le test a échoué.', true);
+    if (!api) {
+      setStatus(API_ABSENT_MESSAGE, true);
       return;
     }
-    setStatus(`Connexion OK : le fournisseur a répondu « ${res.answer} ».`);
-    e.currentTarget.blur();
+    if (testing) return;
+    testing = true;
+    if (btn) btn.disabled = true;
+    try {
+      setStatus('Test en cours…');
+      let res;
+      try {
+        res = await withTimeout(api.test(), TEST_TIMEOUT_MS, TEST_TIMEOUT_MESSAGE);
+      } catch (err) {
+        setStatus((err && (err.isTimeout || isNoReply(err))) ? TEST_TIMEOUT_MESSAGE : 'Le test a échoué. Réessayez.', true);
+        return;
+      }
+      if (!res || !res.ok) {
+        setStatus((res && res.error) || 'Le test a échoué.', true);
+        return;
+      }
+      setStatus(`Connexion OK : le fournisseur a répondu « ${res.answer} ».`);
+    } finally {
+      testing = false;
+      if (btn) btn.disabled = false;
+      if (btn) btn.blur();
+    }
   });
   $('aiClearKeyBtn').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
     const api = aiApi();
-    if (!api) return;
+    if (!api) {
+      setStatus(API_ABSENT_MESSAGE, true);
+      return;
+    }
     if (!current || !current.hasKey) {
       setStatus('Aucune clé à effacer.');
       return;
     }
     if (!window.confirm('Effacer la clé API enregistrée ? Il faudra la saisir de nouveau pour utiliser l’IA.')) return;
-    const res = await api.clearKey();
-    if (!res.ok) {
-      setStatus(res.error || 'Impossible d’effacer la clé.', true);
+    let res;
+    try {
+      res = await withTimeout(api.clearKey(), SAVE_TIMEOUT_MS, CLEAR_TIMEOUT_MESSAGE);
+    } catch (err) {
+      setStatus((err && (err.isTimeout || isNoReply(err))) ? CLEAR_TIMEOUT_MESSAGE : 'Impossible d’effacer la clé.', true);
+      return;
+    }
+    if (!res || !res.ok) {
+      setStatus((res && res.error) || 'Impossible d’effacer la clé.', true);
       return;
     }
     current = res.settings;
     providers = res.settings.providers || [];
     $('aiKeyState').textContent = 'Aucune clé enregistrée.';
     setStatus('Clé effacée.');
-    e.currentTarget.blur();
+    if (btn) btn.blur();
   });
 }
 

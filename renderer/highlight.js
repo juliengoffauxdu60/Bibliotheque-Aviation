@@ -3,8 +3,10 @@
 // Module PUR (aucun DOM, aucun import pdf.js) : il est importé par
 // renderer/app.js ET par les tests Node (node test/highlight.test.mjs).
 // Deux sources de positions, même sortie (rectangles en points PDF) :
-//   - PDF à vrai texte : items getTextContent() { str, x, y, width, height }
-//     (x, y = origine de la ligne de base, y croissant vers le haut).
+//   - PDF à vrai texte : items getTextContent() { str, x, y, width, height,
+//     transform? } (x, y = origine de la ligne de base, y croissant vers
+//     le haut ; transform = matrice [a, b, c, d, e, f] qui porte la
+//     rotation — indispensable pour le texte vertical).
 //   - PDF scanné : boîtes de mots OCR { text, bbox } en pixels d'image,
 //     origine en haut à gauche.
 // La conversion points PDF -> px CSS se fait dans app.js avec le viewport
@@ -118,40 +120,84 @@ export function ocrRectsForTerm(words, imageWidth, imageHeight, term, pageWidth,
 // ---------------------------------------------------------------------------
 // PDF à vrai texte : rectangles d'un terme à partir des items pdf.js
 // ---------------------------------------------------------------------------
-// items : [{ str, x, y, width, height }] en points PDF (x, y = origine
-// de la ligne de base). Le terme est cherché avec la même regex que la
-// recherche (mot entier, insensible à la casse et aux accents, y compris
-// à cheval sur un saut de ligne devenu espace). Un rectangle par segment
-// de ligne : une phrase coupée sur deux lignes donne deux rectangles.
+// items : [{ str, x, y, width, height, transform? }] en points PDF (x, y =
+// origine de la ligne de base). transform est la matrice pdf.js [a, b, c,
+// d, e, f] de l'item (transmise par app.js) : elle porte la rotation du
+// texte — un texte vertical a a ≈ 0, d ≈ 0 et b, c ≈ ±taille de police.
+// Sans transform (anciens appels, tests), le texte est supposé horizontal.
+// Le terme est cherché avec la même regex que la recherche (mot entier,
+// insensible à la casse et aux accents, y compris à cheval sur un saut de
+// ligne devenu espace). Un rectangle par segment de ligne : une phrase
+// coupée sur deux lignes donne deux rectangles.
+//
+// Géométrie : chaque ligne a une direction de lecture u (vecteur (a, b)
+// normalisé) et une direction « haut de glyphe » v (vecteur (c, d)
+// normalisé). Les caractères sont repérés par leur abscisse scalaire le
+// long de u ; pour une correspondance, on prend les quatre coins du
+// segment (extrémités le long de u, de -0,2*h à +h le long de v, comme
+// pour l'horizontal) et on renvoie leur boîte englobante alignée sur les
+// axes. Pour un texte horizontal, u = (1, 0) et v = (0, 1) : le résultat
+// est exactement celui de l'ancien calcul.
 export function textRectsForTerm(items, term) {
   if (!term || !Array.isArray(items) || !items.length) return [];
   const usable = items.filter((it) => it && typeof it.str === 'string' && it.str !== '');
   if (!usable.length) return [];
+  // Orientation et vecteurs d'un item. t = matrice [a, b, c, d, e, f] ou null.
+  const geom = (it) => {
+    const t = Array.isArray(it.transform) && it.transform.length >= 6 &&
+      it.transform.every((v) => Number.isFinite(v)) ? it.transform : null;
+    const [a, b, c, d] = t || [1, 0, 0, 1];
+    const la = Math.hypot(a, b), lc = Math.hypot(c, d);
+    const u = la > 0 ? [a / la, b / la] : [1, 0];
+    const v = lc > 0 ? [c / lc, d / lc] : [0, 1];
+    const vertical = Math.abs(b) > Math.abs(a);
+    const height = (typeof it.height === 'number' && it.height > 0) ? it.height
+      : (la > 0 ? la : 10);
+    return { u, v, vertical, height, coord: vertical ? it.x : it.y };
+  };
   const sorted = [...usable].sort((a, b) => b.y - a.y || a.x - b.x);
   const lines = [];
   for (const it of sorted) {
-    const line = lines.find((l) => Math.abs(l.y - it.y) <= 3);
+    const g = geom(it);
+    const line = lines.find((l) => l.vertical === g.vertical && Math.abs(l.coord - g.coord) <= 3);
     if (line) line.items.push(it);
-    else lines.push({ y: it.y, items: [it] });
+    else lines.push({ coord: g.coord, vertical: g.vertical, items: [it] });
   }
+  const r3 = (v) => Math.round(v * 1000) / 1000;
   const out = [];
   for (const line of lines) {
-    line.items.sort((a, b) => a.x - b.x);
-    // Carte caractère -> abscisses : la largeur de chaque fragment est
-    // répartie uniformément sur ses caractères ; un écart net entre deux
-    // fragments devient un espace (même règle que buildPageText).
+    // Ordre de lecture : abscisse scalaire le long de la direction u du
+    // premier item (dans l'ordre du tri global, qui met le haut en premier).
+    const g0 = geom(line.items[0]);
+    const u = g0.u, v = g0.v;
+    const dot = (p, w) => p[0] * w[0] + p[1] * w[1];
+    const ordered = [...line.items].sort((a, b) => dot([a.x, a.y], u) - dot([b.x, b.y], u));
+    // Origine de la ligne : origine du premier item lu, recalée sur la
+    // coordonnée transverse du groupe (pour l'horizontal : le y du groupe,
+    // comme avant — le rectangle est donc identique à l'ancien calcul).
+    const first = ordered[0];
+    const n = line.vertical ? [1, 0] : [0, 1];
+    const shift = line.coord - dot([first.x, first.y], n);
+    const O = [first.x + n[0] * shift, first.y + n[1] * shift];
+    const h = Math.max(...line.items.map((it) => geom(it).height));
+    // Carte caractère -> abscisses scalaires le long de u : la largeur de
+    // chaque fragment est répartie uniformément sur ses caractères ; un
+    // écart net entre deux fragments devient un espace (même règle que
+    // buildPageText).
     const chars = [];
-    for (let i = 0; i < line.items.length; i++) {
-      const it = line.items[i];
+    for (let i = 0; i < ordered.length; i++) {
+      const it = ordered[i];
+      const t0 = dot([it.x - O[0], it.y - O[1]], u);
       if (i > 0) {
-        const prev = line.items[i - 1];
-        const gap = it.x - (prev.x + prev.width);
-        if (gap > 1) chars.push({ ch: ' ', x0: prev.x + prev.width, x1: it.x });
+        const prev = ordered[i - 1];
+        const prevEnd = dot([prev.x - O[0], prev.y - O[1]], u) + prev.width;
+        const gap = t0 - prevEnd;
+        if (gap > 1) chars.push({ ch: ' ', s0: prevEnd, s1: t0 });
       }
       const s = it.str;
       const cw = s.length ? it.width / s.length : 0;
       for (let k = 0; k < s.length; k++) {
-        chars.push({ ch: s[k], x0: it.x + k * cw, x1: it.x + (k + 1) * cw });
+        chars.push({ ch: s[k], s0: t0 + k * cw, s1: t0 + (k + 1) * cw });
       }
     }
     const lineStr = chars.map((c) => c.ch).join('');
@@ -160,11 +206,22 @@ export function textRectsForTerm(items, term) {
     let guard = 0;
     while ((m = re.exec(lineStr)) !== null && guard++ < 100) {
       if (m[0].length === 0) { re.lastIndex++; continue; }
-      const x0 = chars[m.index].x0;
-      const x1 = chars[m.index + m[0].length - 1].x1;
-      const h = Math.max(...line.items.map((it) => it.height || 10));
-      const r3 = (v) => Math.round(v * 1000) / 1000;
-      out.push({ x0: r3(x0), y0: r3(line.y - 0.2 * h), x1: r3(x1), y1: r3(line.y + h) });
+      const s0 = chars[m.index].s0;
+      const s1 = chars[m.index + m[0].length - 1].s1;
+      // Quatre coins du segment : extrémités le long de u, de -0,2*h à +h
+      // le long de v ; boîte englobante alignée sur les axes.
+      const corners = [
+        [O[0] + u[0] * s0 + v[0] * (-0.2 * h), O[1] + u[1] * s0 + v[1] * (-0.2 * h)],
+        [O[0] + u[0] * s1 + v[0] * (-0.2 * h), O[1] + u[1] * s1 + v[1] * (-0.2 * h)],
+        [O[0] + u[0] * s1 + v[0] * h, O[1] + u[1] * s1 + v[1] * h],
+        [O[0] + u[0] * s0 + v[0] * h, O[1] + u[1] * s0 + v[1] * h],
+      ];
+      out.push({
+        x0: r3(Math.min(...corners.map((c) => c[0]))),
+        y0: r3(Math.min(...corners.map((c) => c[1]))),
+        x1: r3(Math.max(...corners.map((c) => c[0]))),
+        y1: r3(Math.max(...corners.map((c) => c[1]))),
+      });
       if (m.index === re.lastIndex) re.lastIndex++;
     }
   }

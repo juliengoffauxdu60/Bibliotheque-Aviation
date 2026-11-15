@@ -1,9 +1,10 @@
 // main-import.js — Import de POH + OCR, côté processus principal.
 //
 // CHARGÉ PAR main.js (patch d'intégration : 2 lignes — voir le rapport).
-// Ne touche jamais aux 4 POH fournis : chaque PDF importé est COPIÉ dans
-// app.getPath('userData')/pohs/<doc_id>/ avec son index.json et son
-// meta.json (registre : un meta.json par document importé).
+// Chaque PDF importé est COPIÉ dans app.getPath('userData')/pohs/<doc_id>/
+// avec son index.json et son meta.json (registre : un meta.json par
+// document importé). Depuis la v1.2.0, il n'y a plus de document fourni :
+// les documents importés sont les seuls documents de l'application.
 //
 // Canaux IPC (exposés au rendu par preload.cjs, patch d'intégration) :
 //   poh-import:list         -> [{ doc_id, title, ..., doc }]
@@ -16,9 +17,7 @@
 //   poh-import:ocr-finish   -> { ok, doc_id, title, totalPages, sections,
 //                                sectionDetection, sectionSource }
 //   poh-import:ocr-cancel   -> { ok: true }
-//   poh-import:delete       -> { ok: true } (importé : dossier supprimé ;
-//                                fourni : id enregistré dans deleted-docs.json)
-//   poh-import:deleted-list -> [{ id, title }] (documents fournis supprimés)
+//   poh-import:delete       -> { ok: true } (document importé : dossier supprimé)
 // En cas d'erreur un handler retourne { ok: false, error } (jamais d'exception
 // non attrapée : le rendu affiche le message).
 import { app, dialog, ipcMain } from 'electron';
@@ -126,45 +125,6 @@ function refreshImportedDoc(docId, meta) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Documents fournis supprimés (l'utilisateur peut retirer un document de
-// base — 172N, 172R, 150, SOP — comme un importé ; on ne supprime jamais
-// les fichiers fournis du disque (ils vivent dans le paquet), on enregistre
-// leur id et on les filtre partout — suppression définitive, sans restauration).
-// Stockage : userData/deleted-docs.json — simple tableau d'identifiants.
-// ---------------------------------------------------------------------------
-function deletedDocsPath() {
-  return path.join(app.getPath('userData'), 'deleted-docs.json');
-}
-
-function bundledDocs() {
-  try {
-    const docs = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'docs.json'), 'utf8'));
-    return Array.isArray(docs.docs) ? docs.docs : [];
-  } catch {
-    return [];
-  }
-}
-
-function readDeletedDocs() {
-  try {
-    const raw = JSON.parse(fs.readFileSync(deletedDocsPath(), 'utf8'));
-    if (!Array.isArray(raw)) return [];
-    const known = new Set(bundledDocs().map((d) => d.id));
-    return raw.filter((id) => typeof id === 'string' && known.has(id));
-  } catch { return []; }
-}
-
-function writeDeletedDocs(ids) {
-  fs.mkdirSync(path.dirname(deletedDocsPath()), { recursive: true });
-  fs.writeFileSync(deletedDocsPath(), JSON.stringify([...new Set(ids)], null, 2), 'utf8');
-}
-
-function listDeletedDocs() {
-  const deleted = new Set(readDeletedDocs());
-  return bundledDocs().filter((d) => deleted.has(d.id)).map((d) => ({ id: d.id, title: d.title }));
-}
-
 // Dossiers candidats pour les données OCR (fra+eng). En dev : assets/.
 // Empaqueté : extraResources (process.resourcesPath) ou assets/ dans asar.
 function tessdataCandidates() {
@@ -182,23 +142,13 @@ function tessdataCandidates() {
 const ocrSessions = new Map();
 let ocrWorkerFailed = false; // tesseract.js inutilisable -> secours binaire système
 
-// Re-OCR des documents fournis (172N scanné) : les boîtes de mots vont
-// dans userData/ocr-words/<doc_id>.json, JAMAIS dans l'index fourni
-// (paquet en lecture seule une fois empaqueté). Sessions séparées des
-// imports : docId -> { totalPages, texts: Map, words: Map }.
-const ocrWordsSessions = new Map();
-
-function ocrWordsDir() {
-  return path.join(app.getPath('userData'), 'ocr-words');
-}
-
 // Reconnaît une page (PNG) : texte + boîtes de mots. Chemin unique pour
-// l'OCR des imports et le re-OCR des fournis — même comportement qu'avant
-// pour le texte (worker tesseract.js, puis secours binaire système) ; la
-// seule nouveauté est que le chemin worker rapporte aussi les boîtes, et
-// que le secours système rapporte des mots vides (le binaire ne donne pas
-// de boîtes) sans faire échouer l'OCR. Lève une erreur si l'OCR est
-// impossible (aucun des deux chemins ne marche).
+// l'OCR des imports — même comportement qu'avant pour le texte (worker
+// tesseract.js, puis secours binaire système) ; la seule nouveauté est que
+// le chemin worker rapporte aussi les boîtes, et que le secours système
+// rapporte des mots vides (le binaire ne donne pas de boîtes) sans faire
+// échouer l'OCR. Lève une erreur si l'OCR est impossible (aucun des deux
+// chemins ne marche).
 async function recognizePage(pngBuffer) {
   let lastError = null;
   if (!ocrWorkerFailed) {
@@ -419,130 +369,16 @@ async function ocrFinish({ docId }) {
 async function ocrCancel({ docId }) {
   if (docId && isSafeDocId(docId)) {
     ocrSessions.delete(docId);
-    ocrWordsSessions.delete(docId);
   }
   try { await terminateOcrWorker(); } catch { /* déjà arrêté */ }
   ocrWorkerFailed = false; // un nouvel OCR retentera tesseract.js
   return { ok: true };
 }
 
-// ---------------------------------------------------------------------------
-// Boîtes de mots OCR des documents fournis (v1.1.3 — surlignage)
-// ---------------------------------------------------------------------------
-// Le 172N est scanné et son index vit dans le paquet (lecture seule une
-// fois empaqueté) : refaire son OCR ne touche JAMAIS à l'index fourni.
-// Les boîtes vont dans userData/ocr-words/<doc_id>.json :
-//   { doc_id, total_pages, pages: [{ page, imageWidth, imageHeight, words }] }
-// Garde-fous : docId doit être un document fourni connu (liste data/docs.json,
-// jamais un id libre), et le fichier écrit est toujours
-// userData/ocr-words/<id>.json — aucun autre chemin d'écriture.
-
-async function ocrWordsPage({ docId, pdfPage, pngBase64, imageWidth, imageHeight }) {
-  if (!isSafeDocId(docId)) return { ok: false, error: 'Identifiant de document invalide.' };
-  const bundled = bundledDocs().find((d) => d.id === docId);
-  if (!bundled) return { ok: false, error: 'Le re-OCR avec surlignage ne concerne que les documents fournis.' };
-  if (!pngBase64 || typeof pngBase64 !== 'string') return { ok: false, error: 'Image de page manquante.' };
-  const pageNum = Number(pdfPage);
-  if (!Number.isInteger(pageNum) || pageNum < 1 || pageNum > bundled.totalPages) {
-    return { ok: false, error: 'Numéro de page invalide : ' + String(pdfPage) };
-  }
-  let session = ocrWordsSessions.get(docId);
-  if (!session) {
-    session = { totalPages: bundled.totalPages, texts: new Map(), words: new Map() };
-    ocrWordsSessions.set(docId, session);
-  }
-  const pngBuffer = Buffer.from(pngBase64, 'base64');
-  if (!pngBuffer.length) return { ok: false, error: 'Image de page vide.' };
-  let recognized;
-  try {
-    recognized = await recognizePage(pngBuffer);
-  } catch (e) {
-    return { ok: false, error: 'OCR impossible : ' + e.message };
-  }
-  session.texts.set(pageNum, recognized.text);
-  session.words.set(pageNum, {
-    imageWidth: Number(imageWidth) || null,
-    imageHeight: Number(imageHeight) || null,
-    words: recognized.words,
-  });
-  return {
-    ok: true, pdfPage: pageNum, chars: recognized.text.length,
-    words: recognized.words.length, done: session.texts.size, total: session.totalPages,
-  };
-}
-
-async function ocrWordsFinish({ docId, totalPages }) {
-  if (!isSafeDocId(docId)) return { ok: false, error: 'Identifiant de document invalide.' };
-  const bundled = bundledDocs().find((d) => d.id === docId);
-  if (!bundled) return { ok: false, error: 'Le re-OCR avec surlignage ne concerne que les documents fournis.' };
-  const session = ocrWordsSessions.get(docId);
-  if (!session || session.texts.size === 0) {
-    return { ok: false, error: 'Aucune page OCR à enregistrer (OCR annulé ou jamais lancé).' };
-  }
-  const total = Number(totalPages) || bundled.totalPages;
-  if (total !== bundled.totalPages) {
-    return { ok: false, error: `Nombre de pages incohérent pour ce document (attendu ${bundled.totalPages}).` };
-  }
-  if (session.texts.size < session.totalPages) {
-    return {
-      ok: false,
-      error: `OCR incomplet : ${session.texts.size} page(s) sur ${session.totalPages}. Relancez l’OCR (il recommence au début).`,
-    };
-  }
-  const pages = [];
-  for (let p = 1; p <= session.totalPages; p++) {
-    pages.push({ pdf_page: p, text: session.texts.get(p) || '' });
-  }
-  // Vérification avant écriture : l'OCR doit avoir reconnu du texte,
-  // sinon les boîtes ne valent rien (même garde que ocrFinish).
-  const { scanned, medianChars } = isScanned(pages);
-  if (scanned) {
-    return {
-      ok: false,
-      error: `L’OCR n’a presque rien reconnu (médiane ${medianChars} caractères/page). ` +
-        'Le document est peut-être illisible (pages blanches, résolution trop faible). Boîtes non enregistrées.',
-    };
-  }
-  let wordsTotal = 0;
-  const outPages = [];
-  for (let p = 1; p <= session.totalPages; p++) {
-    const w = session.words.get(p) || { imageWidth: null, imageHeight: null, words: [] };
-    wordsTotal += w.words.length;
-    outPages.push({ page: p, imageWidth: w.imageWidth, imageHeight: w.imageHeight, words: w.words });
-  }
-  const dir = ocrWordsDir();
-  fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, docId + '.json');
-  if (!file.startsWith(dir)) return { ok: false, error: 'Refus d’écrire hors du dossier des boîtes OCR.' };
-  fs.writeFileSync(file, JSON.stringify(
-    { doc_id: docId, total_pages: session.totalPages, pages: outPages }, null, 2), 'utf8');
-  ocrWordsSessions.delete(docId);
-  try { await terminateOcrWorker(); } catch { /* déjà arrêté */ }
-  return { ok: true, doc_id: docId, totalPages: session.totalPages, wordsTotal, medianChars };
-}
-
-function ocrWordsGet({ docId }) {
-  if (!isSafeDocId(docId)) return { ok: false, error: 'Identifiant de document invalide.' };
-  const file = path.join(ocrWordsDir(), docId + '.json');
-  if (!fs.existsSync(file)) return { ok: true, found: false };
-  try {
-    return { ok: true, found: true, data: JSON.parse(fs.readFileSync(file, 'utf8')) };
-  } catch (e) {
-    return { ok: false, error: 'Boîtes OCR illisibles : ' + e.message };
-  }
-}
-
 function deleteDoc({ docId }) {
   if (!isSafeDocId(docId)) return { ok: false, error: 'Identifiant de document invalide.' };
-  // Document fourni : ses PDF vivent dans le paquet, on ne peut pas les
-  // effacer du disque — supprimer = enregistrer son id dans
-  // deleted-docs.json (le filtre de loadData() l'exclut partout).
-  const bundled = new Set(bundledDocs().map((d) => d.id));
-  if (bundled.has(docId)) {
-    const ids = readDeletedDocs();
-    if (!ids.includes(docId)) { ids.push(docId); writeDeletedDocs(ids); }
-    return { ok: true, doc_id: docId };
-  }
+  // v1.2.0 : tous les documents sont des importés — supprimer = effacer
+  // le dossier userData/pohs/<doc_id>, définitivement.
   const dir = docDir(docId);
   // Garde : on ne supprime que sous userData/pohs/<doc_id>, jamais ailleurs.
   const base = pohsDir();
@@ -568,9 +404,5 @@ export function registerImportHandlers() {
   ipcMain.handle('poh-import:ocr-page', (_e, args) => ocrPage(args || {}));
   ipcMain.handle('poh-import:ocr-finish', (_e, args) => ocrFinish(args || {}));
   ipcMain.handle('poh-import:ocr-cancel', (_e, args) => ocrCancel(args || {}));
-  ipcMain.handle('poh-import:ocr-words-page', (_e, args) => ocrWordsPage(args || {}));
-  ipcMain.handle('poh-import:ocr-words-finish', (_e, args) => ocrWordsFinish(args || {}));
-  ipcMain.handle('poh-import:ocr-words-get', (_e, args) => ocrWordsGet(args || {}));
   ipcMain.handle('poh-import:delete', (_e, args) => deleteDoc(args || {}));
-  ipcMain.handle('poh-import:deleted-list', () => listDeletedDocs());
 }

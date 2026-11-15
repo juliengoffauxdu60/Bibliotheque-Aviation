@@ -1,5 +1,13 @@
 # Rapport de vérification — Bibliothèque Aviation (desktop)
 
+> Note v1.2.0 (14 nov. 2026) : ce rapport documente la v1.1.3, livrée AVEC
+> les 4 documents fournis (172N, 172R, 150, SOP C150 — 1028 pages). Depuis
+> la v1.2.0, l'appli est livrée SANS aucun document : les chiffres ci-dessous
+> (fuel = 209, stall 172N = 11 pages, etc.) restent vrais comme mesures sur
+> les fixtures `test/fixtures/bundled/`, mais ne décrivent plus l'appli
+> livrée. Le selftest actuel (34 vérifications) part de l'état vide et
+> importe un petit PDF fixture de 3 pages (fuel = 2 pages, stall = 1 page).
+
 Date : 14 novembre 2026. Vérifié par tests réels dans l'application
 (Electron lancé sous Xvfb), pas par revue de code seule.
 

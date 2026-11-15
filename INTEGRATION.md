@@ -1,3 +1,12 @@
+## Retrait des documents fournis (v1.2.0)
+
+L'appli est livrée sans aucun document : au premier lancement, la zone
+Documents est vide et invite à ajouter un premier document. Les 4 anciens
+documents fournis (172N, 172R, 150, SOP C150) ne sont plus que des fixtures
+de test dans `test/fixtures/bundled/` — ils ne sont pas empaquetés
+(`package.json` → `build.files` : `assets/pdfjs/**`, `assets/tesseract/**`,
+`data/synonyms.json` seulement, plus le code).
+
 # Intégration — import POH + Réglages IA (14 nov. 2026, coordinateur)
 
 Patchs d'intégration appliqués après les livraisons des agents import/OCR et IA
@@ -17,8 +26,12 @@ Patchs d'intégration appliqués après les livraisons des agents import/OCR et 
   scripts `import.js` et `ai.js` après `app.js`.
 - `renderer/app.js` (`loadData`) : charge aussi les documents importés
   (registre `userData/pohs`) — source unique de vérité pour la recherche.
+  Depuis la v1.2.0, ce sont les SEULS documents : `data/docs.json` n'existe
+  plus, le chargement démarre sur une liste vide.
 - `renderer/ai.js` (`loadIndexes`) : même chargement des documents importés
   — les questions IA couvrent aussi les POH ajoutés par l'utilisateur.
+  Depuis la v1.2.0, `data/docs.json` absent = 0 document, 0 passage trouvé,
+  sans plantage.
 - `package.json` : dépendance `tesseract.js@6.0.1` déclarée ; `build.files`
   ajoute `main-import.js` ET `main-ai.js` (racine, non couverts par
   `renderer/**/*`) ; `asarUnpack` pour `tesseract.js` et
