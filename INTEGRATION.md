@@ -2,10 +2,12 @@
 
 L'appli est livrée sans aucun document : au premier lancement, la zone
 Documents est vide et invite à ajouter un premier document. Les 4 anciens
-documents fournis (172N, 172R, 150, SOP C150) ne sont plus que des fixtures
-de test dans `test/fixtures/bundled/` — ils ne sont pas empaquetés
-(`package.json` → `build.files` : `assets/pdfjs/**`, `assets/tesseract/**`,
-`data/synonyms.json` seulement, plus le code).
+documents fournis (172N, 172R, 150, SOP C150) ont quitté le dépôt le
+15 nov. 2026 : les tests utilisent désormais des fixtures SYNTHÉTIQUES
+(`test/fixtures/synthetic/` — index JSON de 3 documents fictifs —
+et `test/fixtures/synthetic-pdf.mjs`, qui génère un PDF de 10 pages),
+jamais empaquetées (`package.json` → `build.files` : `assets/pdfjs/**`,
+`assets/tesseract/**`, `data/synonyms.json` seulement, plus le code).
 
 # Intégration — import POH + Réglages IA (14 nov. 2026, coordinateur)
 

@@ -1,6 +1,7 @@
 // Tests du surlignage des termes cherchés (v1.1.3, Node, sans Electron).
 // Vérifient la géométrie pure (renderer/highlight.js) et la correspondance
-// (mot entier, casse/accents) contre le VRAI viewport pdf.js du C172R.
+// (mot entier, casse/accents) contre le VRAI viewport pdf.js du PDF
+// SYNTHÉTIQUE (test/fixtures/synthetic-pdf.mjs, 10 pages, lettres US).
 //   node test/highlight.test.mjs
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,12 +11,10 @@ import {
   normalizeForMatch, fractionRectToPdfPoints, ocrRectsForTerm,
   textRectsForTerm, pdfRectToCss, clampCssRect,
 } from '../renderer/highlight.js';
+import { syntheticPdfPath } from './fixtures/synthetic-pdf.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const base = path.join(root, '..');
-// Document anciennement fourni, désormais fixture de test uniquement
-// (v1.2.0 : l'appli livrée ne contient plus aucun document d'origine).
-const bundled = path.join(root, 'fixtures', 'bundled');
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -116,12 +115,12 @@ check('texte : phrase coupée -> deux rectangles (un par ligne)',
   [{ x0: 100, y0: 657.6, x1: 535, y1: 672 }, { x0: 100, y0: 637.6, x1: 170, y1: 652 }]);
 
 // 5. Points PDF -> px CSS avec le VRAI viewport pdf.js (rotation 0).
-const data = new Uint8Array(fs.readFileSync(path.join(bundled, 'assets/C172R-final.pdf')));
+const data = new Uint8Array(fs.readFileSync(syntheticPdfPath()));
 const doc = await pdfjsLib.getDocument({ data, isEvalSupported: false }).promise;
 const page = await doc.getPage(5);
 const viewport = page.getViewport({ scale: 1 });
-check('viewport 172R p.5 : rotation 0', viewport.rotation, 0);
-check('viewport 172R p.5 : dimensions lettre', [Math.round(viewport.width), Math.round(viewport.height)], [612, 792]);
+check('viewport synthétique p.5 : rotation 0', viewport.rotation, 0);
+check('viewport synthétique p.5 : dimensions lettre', [Math.round(viewport.width), Math.round(viewport.height)], [612, 792]);
 check('CSS : page entière -> canevas entier',
   pdfRectToCss(viewport, { x0: 0, y0: 0, x1: 612, y1: 792 }),
   { left: 0, top: 0, width: 612, height: 792 });

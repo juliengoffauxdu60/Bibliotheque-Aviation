@@ -31,7 +31,7 @@
       "owner": "juliengoffauxdu60",
       "provider": "github",
       "releaseType": "release",
-      "repo": "Recherche-POH"
+      "repo": "Bibliotheque-Aviation"
     },
     "win": {
       "target": "nsis"
@@ -52,7 +52,7 @@
   "private": true,
   "repository": {
     "type": "git",
-    "url": "https://github.com/juliengoffauxdu60/Recherche-POH.git"
+    "url": "https://github.com/juliengoffauxdu60/Bibliotheque-Aviation.git"
   },
   "scripts": {
     "build": "electron-builder --publish never",

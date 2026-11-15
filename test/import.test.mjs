@@ -1,8 +1,11 @@
 // Tests de l'import de POH (Node, sans Electron).
-// Vérifient la logique pure (import-core.js) contre les VRAIS PDF fournis.
+// Vérifient la logique pure (import-core.js) contre un PDF SYNTHÉTIQUE
+// (test/fixtures/synthetic-pdf.mjs, 10 pages, texte connu) et des index
+// JSON synthétiques — les 4 documents de base ont quitté le dépôt
+// (15 nov. 2026) et ne doivent jamais y revenir.
 //   node test/import.test.mjs              -> tests rapides (sans OCR)
-//   POH_TEST_OCR=1 node test/import.test.mjs -> + OCR d'une page 172N
-//     (nécessite pdftoppm, fourni par poppler-utils)
+//   POH_TEST_OCR=1 node test/import.test.mjs -> + OCR de la page 8
+//     synthétique (nécessite pdftoppm, fourni par poppler-utils)
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -17,12 +20,10 @@ import {
   normalizeOcrWords, flattenOcrWords, ocrPngBufferWithWords,
 } from '../import-core.js';
 
+import { syntheticPdfPath } from './fixtures/synthetic-pdf.mjs';
+
 const root = path.dirname(fileURLToPath(import.meta.url));
 const base = path.join(root, '..');
-// Documents anciennement fournis, désormais fixtures de test uniquement
-// (v1.2.0 : l'appli livrée ne contient plus aucun document d'origine).
-const bundled = path.join(root, 'fixtures', 'bundled');
-const docsMeta = JSON.parse(fs.readFileSync(path.join(bundled, 'data/docs.json'), 'utf8'));
 
 let failures = 0;
 let skipped = 0;
@@ -205,39 +206,41 @@ check('tagSectionsSource : source + confiance',
 check('isScanned vide', isScanned([{ text: '' }, { text: 'ab' }]), { scanned: true, medianChars: 1, charsPerPage: [0, 2] });
 check('isScanned plein', isScanned([{ text: 'x'.repeat(500) }, { text: 'y'.repeat(400) }]).scanned, false);
 
-// 5. Extraction réelle du C150N + sections comparées à docs.json.
-const c150 = await extractPdfText(path.join(bundled, 'assets/C150N-final.pdf'));
-check('C150N : 199 pages', c150.numPages, 199);
-check('C150N : page 2 vide (comme l’index fourni)', c150.pages[1].text, '');
-check('C150N : page 3 contient PERFORMANCE', c150.pages[2].text.includes('PERFORMANCE'), true);
-const det150 = detectSections(c150.pages);
-const ref150 = docsMeta.docs.find((d) => d.id === 'c150n');
-check('C150N : sections détectées = docs.json (pages de début)',
-  det150.sections.map((s) => s.startPage), ref150.sections.map((s) => s.startPage));
-check('C150N : sections détectées = docs.json (clés)',
-  det150.sections.map((s) => s.key), ref150.sections.map((s) => s.key));
-const idx150 = buildIndex({ docId: 'c150n-test', title: 'TEST', pdfPath: 'user-pohs/x/y.pdf', pages: c150.pages });
-check('C150N : index même format (clés)', Object.keys(idx150).sort(), ['doc_id', 'pages', 'pdf_path', 'title']);
-check('C150N : page 7 label 1-1', idx150.pages[6].printed_label, '1-1');
-check('C150N : page 5 label ii', idx150.pages[4].printed_label, 'ii');
-check('C150N : page 7 section 1', idx150.pages[6].section, '1');
-check('C150N : non scanné', isScanned(c150.pages).scanned, false);
+// 5. Extraction réelle du PDF synthétique + sections comparées à la
+// référence (définie dans test/fixtures/synthetic-pdf.mjs).
+const synPdf = syntheticPdfPath();
+const syn = await extractPdfText(synPdf);
+const refSyn = { keys: ['front', '1', '2'], starts: [1, 4, 9] };
+check('synthétique : 10 pages', syn.numPages, 10);
+check('synthétique : page 2 vide', syn.pages[1].text, '');
+check('synthétique : page 3 contient PERFORMANCE', syn.pages[2].text.includes('PERFORMANCE'), true);
+const detSyn = detectSections(syn.pages);
+check('synthétique : sections détectées (pages de début)',
+  detSyn.sections.map((s) => s.startPage), refSyn.starts);
+check('synthétique : sections détectées (clés)',
+  detSyn.sections.map((s) => s.key), refSyn.keys);
+const idxSyn = buildIndex({ docId: 'syn-test', title: 'TEST', pdfPath: 'user-pohs/x/y.pdf', pages: syn.pages });
+check('synthétique : index même format (clés)', Object.keys(idxSyn).sort(), ['doc_id', 'pages', 'pdf_path', 'title']);
+check('synthétique : page 7 label 1-1', idxSyn.pages[6].printed_label, '1-1');
+check('synthétique : page 5 label ii', idxSyn.pages[4].printed_label, 'ii');
+check('synthétique : page 7 section 1', idxSyn.pages[6].section, '1');
+check('synthétique : non scanné', isScanned(syn.pages).scanned, false);
 
 // 5b. Détection en couches (v1.1.3).
-// C150N : pas de signets, sommaire non fiable -> repli titres, sections
-// identiques à docs.json.
-const lay150 = await detectSectionsLayered(path.join(bundled, 'assets/C150N-final.pdf'), c150.pages);
-check('couches C150N : source titres', lay150.source, 'heading');
-check('couches C150N : sections = docs.json (pages)',
-  lay150.sections.map((s) => s.startPage), ref150.sections.map((s) => s.startPage));
-check('couches C150N : confiance titres', lay150.sections[1].confidence, 0.75);
+// Synthétique : pas de signets, pas de sommaire détectable -> repli
+// titres, sections identiques à la référence.
+const laySyn = await detectSectionsLayered(synPdf, syn.pages);
+check('couches synthétique : source titres', laySyn.source, 'heading');
+check('couches synthétique : sections (pages)',
+  laySyn.sections.map((s) => s.startPage), refSyn.starts);
+check('couches synthétique : confiance titres', laySyn.sections[1].confidence, 0.75);
 // Fichier illisible ou absent -> repli titres, jamais d'exception.
-const layMissing = await detectSectionsLayered(path.join(base, 'assets/n-existe-pas.pdf'), c150.pages);
+const layMissing = await detectSectionsLayered(path.join(base, 'assets/n-existe-pas.pdf'), syn.pages);
 check('couches fichier absent : repli titres', layMissing.source, 'heading');
-// Signets : le C150N n'en a pas.
+// Signets : le PDF synthétique n'en a pas.
 const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-const doc150 = await pdfjs.getDocument({ data: new Uint8Array(fs.readFileSync(path.join(bundled, 'assets/C150N-final.pdf'))), isEvalSupported: false }).promise;
-check('signets C150N : aucun', await detectOutlineSections(doc150, c150.pages), null);
+const docSyn = await pdfjs.getDocument({ data: new Uint8Array(fs.readFileSync(synPdf)), isEvalSupported: false }).promise;
+check('signets synthétique : aucun', await detectOutlineSections(docSyn, syn.pages), null);
 // AIM GEN/RAC : signets présents (PDF téléchargés dans /tmp, sinon passé).
 for (const [nom, fichier, cles, pagesDebut] of [
   ['GEN', '/tmp/aim-gen.pdf',
@@ -258,7 +261,7 @@ for (const [nom, fichier, cles, pagesDebut] of [
 // buildIndex : pageSection et sectionSource fournis par la détection en
 // couches (sinon, la passe titres — testée plus haut, clés inchangées).
 const idxOver = buildIndex({
-  docId: 'x', title: 'T', pdfPath: 'p', pages: c150.pages.slice(0, 10),
+  docId: 'x', title: 'T', pdfPath: 'p', pages: syn.pages.slice(0, 10),
   pageSection: new Map([[1, 'front'], [7, '1']]), sectionSource: 'outline',
 });
 check('index : pageSection fourni respecté', idxOver.pages[6].section, '1');
@@ -352,11 +355,11 @@ check('index : repli système -> mots vides stockés', idxEmptyWords.pages[0].oc
 const tess = resolveTessdataDir([path.join(base, 'assets', 'tesseract', 'tessdata')]);
 check('tessdata fra+eng vendu', tess, path.join(base, 'assets', 'tesseract', 'tessdata'));
 
-// 8. OCR d'une page 172N (scannée) — lent, sous POH_TEST_OCR=1 seulement.
+// 8. OCR d'une page du PDF synthétique (texte imprimé) — lent, sous POH_TEST_OCR=1 seulement.
 if (process.env.POH_TEST_OCR === '1') {
   try {
     execFileSync('pdftoppm', ['-png', '-r', '200', '-f', '8', '-l', '8',
-      path.join(bundled, 'assets/C172N-final.pdf'), '/tmp/poh-import-ocr-page'], { stdio: 'ignore' });
+      synPdf, '/tmp/poh-import-ocr-page'], { stdio: 'ignore' });
     const rendered = fs.readdirSync('/tmp').filter((f) => f.startsWith('poh-import-ocr-page-') && f.endsWith('.png')).sort();
     if (!rendered.length) throw new Error('pdftoppm n’a rien produit');
     const png = fs.readFileSync(path.join('/tmp', rendered[0]));
@@ -364,16 +367,16 @@ if (process.env.POH_TEST_OCR === '1') {
     const worker = await getOcrWorker(tess, () => {});
     const text = await ocrPngBuffer(worker, png);
     await terminateOcrWorker();
-    check('OCR 172N p. 8 : trouve SECTION 1', text.includes('SECTION 1'), true);
-    check('OCR 172N p. 8 : trouve GENERAL', /GENERAL/i.test(text), true);
-    check('OCR 172N p. 8 : plus de 500 caractères', text.length > 500, true);
+    check('OCR synthétique p. 8 : trouve SECTION 1', text.includes('SECTION 1'), true);
+    check('OCR synthétique p. 8 : trouve GENERAL', /GENERAL/i.test(text), true);
+    check('OCR synthétique p. 8 : plus de 500 caractères', text.length > 500, true);
     console.log('  (extrait OCR : ' + JSON.stringify(text.slice(0, 120)) + ')');
   } catch (e) {
-    console.log(`ÉCHEC OCR 172N p. 8 — ${e.message}`);
+    console.log(`ÉCHEC OCR synthétique p. 8 — ${e.message}`);
     failures++;
   }
 } else {
-  skip('OCR 172N p. 8', 'lancer avec POH_TEST_OCR=1 (lent)');
+  skip('OCR synthétique p. 8', 'lancer avec POH_TEST_OCR=1 (lent)');
 }
 
 console.log(failures === 0

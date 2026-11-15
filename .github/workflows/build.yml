@@ -1,6 +1,6 @@
 # Build — Bibliothèque Aviation (Electron)
 #
-# Dépôt : juliengoffauxdu60/Recherche-POH (privé). Trois jobs en série :
+# Dépôt : juliengoffauxdu60/Bibliotheque-Aviation (privé). Trois jobs en série :
 # Windows construit, macOS construit, puis UN SEUL job publie la Release.
 #
 # POURQUOI ELECTRON-BUILDER NE PUBLIE JAMAIS (leçon des v1.0.0 / v1.1.0,

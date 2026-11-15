@@ -47,7 +47,7 @@ POH_WIDTH=390 POH_HEIGHT=844 xvfb-run -a npm run selftest
 | `renderer/search.js` | Moteur de recherche (mot entier, insensible à la casse et aux accents, synonymes FR↔EN, ordre de lecture). |
 | `renderer/tools.js` | Conversions aéronautiques + calculatrice générale. |
 | `data/synonyms.json` | Synonymes FR↔EN, liste fixe (voir le statut « à confirmer » dans le rapport). |
-| `test/fixtures/bundled/` | Les 4 anciens documents fournis (PDF + index + docs.json) : fixtures de test uniquement, jamais empaquetés. |
+| `test/fixtures/synthetic/` | Fixtures synthétiques (index JSON de 3 documents fictifs + docs.json) : données de test uniquement, jamais empaquetées. Le PDF synthétique (10 pages) est généré par `test/fixtures/synthetic-pdf.mjs`. |
 | `assets/pdfjs/` | pdf.js vendu dans l'appli (pdf.mjs + pdf.worker.mjs, v6.5.438) : aucun CDN. |
 
 ## Fichiers binaires (à ajouter manuellement au dépôt)

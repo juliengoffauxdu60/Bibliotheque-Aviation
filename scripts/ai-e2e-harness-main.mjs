@@ -264,10 +264,11 @@ app.whenReady().then(async () => {
         // v1.2.0 : l'appli est livrée sans document fourni — data/docs.json
         // et data/index/*.json n'existent plus dans le paquet. Le flux
         // « question » a toujours besoin d'index : le HARNAIS SEUL sert
-        // alors les fixtures de test (test/fixtures/bundled), sans rien
-        // écrire dans l'appli.
+        // alors les fixtures SYNTHÉTIQUES (test/fixtures/synthetic),
+        // sans rien écrire dans l'appli. Les documents de base ont
+        // quitté le dépôt (15 nov. 2026) et ne doivent jamais y revenir.
         if (url.host !== 'e2e' && (rel === 'data/docs.json' || rel.startsWith('data/index/'))) {
-          const fixturePath = path.normalize(path.join(ROOT, 'test', 'fixtures', 'bundled', rel));
+          const fixturePath = path.normalize(path.join(ROOT, 'test', 'fixtures', 'synthetic', rel));
           if (fs.existsSync(fixturePath) && fs.statSync(fixturePath).isFile()) {
             const fixtureBody = fs.readFileSync(fixturePath);
             return new Response(fixtureBody, {

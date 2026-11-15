@@ -1,8 +1,7 @@
 // Tests IA (Node, sans Electron) : logique pure des fournisseurs, du prompt
-// et de la récupération du contexte — contre les index JSON des documents
-// anciennement fournis, désormais fixtures de test uniquement (v1.2.0 :
-// l'appli livrée ne contient plus aucun document d'origine — même motif
-// que test/search.test.mjs).
+// et de la récupération du contexte — contre des index JSON SYNTHÉTIQUES
+// (test/fixtures/synthetic/) : les 4 documents de base ont quitté le
+// dépôt (15 nov. 2026) et ne doivent jamais y revenir.
 // Usage : node test/ai.test.mjs
 import fs from 'node:fs';
 import path from 'node:path';
@@ -16,10 +15,10 @@ import { buildTermRegex } from '../renderer/search.js';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const base = path.join(root, '..');
-const bundled = path.join(root, 'fixtures', 'bundled');
-const docsMeta = JSON.parse(fs.readFileSync(path.join(bundled, 'data/docs.json'), 'utf8'));
+const synthetic = path.join(root, 'fixtures', 'synthetic');
+const docsMeta = JSON.parse(fs.readFileSync(path.join(synthetic, 'data/docs.json'), 'utf8'));
 const synonyms = JSON.parse(fs.readFileSync(path.join(base, 'data/synonyms.json'), 'utf8'));
-const docs = docsMeta.docs.map((d) => JSON.parse(fs.readFileSync(path.join(bundled, d.index), 'utf8')));
+const docs = docsMeta.docs.map((d) => JSON.parse(fs.readFileSync(path.join(synthetic, d.index), 'utf8')));
 const meta = {};
 for (const d of docsMeta.docs) meta[d.id] = d;
 
@@ -191,11 +190,11 @@ check('expressions : pression d’huile (apostrophe normalisée en droite)',
 check('expressions : vitesse de décrochage (sans accents, normalisé)',
   extractQuestionPhrases('Quelle est la vitesse de décrochage du 172N ?').includes('vitesse de decrochage'), true);
 
-// 9. Récupération du contexte sur les VRAIS index (moteur existant réutilisé).
+// 9. Récupération du contexte sur les index SYNTHÉTIQUES (moteur existant réutilisé).
 const ctx = retrieveContext(docs, meta, synonyms, 'Quelle est la vitesse de décrochage du 172N ?');
 check('contexte décrochage : pages trouvées', ctx.pages.length > 0, true);
 check('contexte décrochage : au plus 6 pages', ctx.pages.length <= 6, true);
-check('contexte décrochage : une page 172N', ctx.pages.some((p) => p.docId === 'c172n'), true);
+check('contexte décrochage : une page syn-en', ctx.pages.some((p) => p.docId === 'syn-en'), true);
 check('contexte décrochage : chaque page a doc/section/page + extrait',
   ctx.pages.every((p) => p.docTitle && p.sectionLabel && p.pageLabel && p.excerpt && p.excerpt.length > 20), true);
 check('contexte décrochage : l’extrait contient un terme cherché',
