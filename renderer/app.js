@@ -390,7 +390,10 @@ function paintHighlightRects(rects) {
 
 async function updateHighlights(page, viewport) {
   const result = state.currentResult >= 0 ? state.results[state.currentResult] : null;
-  const term = result ? result.termFound : null;
+  // Le terme surligné est celui qui a réellement été trouvé sur la page
+  // (v1.2.3 : « SPEEDS » pour « speed », « décrochage » pour « décro ») ;
+  // sinon le terme cherché, comme avant.
+  const term = result ? (result.highlightTerm || result.termFound) : null;
   if (!term) { clearHighlights(); return; }
   try {
     let rectsPdf = [];
@@ -721,7 +724,7 @@ function clearSearchResults() {
 async function runSearch(query, scopeOpt) {
   const scope = scopeOpt || state.lastScope || 'all';
   const limit = scope === 'all' ? 500 : 1000;
-  const { results, total, truncated, terms } = searchDocs(
+  const { results, total, truncated, terms, tierCounts } = searchDocs(
     orderedIndexes(), metaMap(), query, state.synonyms, { scope, limit },
   );
   state.results = results;
@@ -729,10 +732,15 @@ async function runSearch(query, scopeOpt) {
   state.lastScope = scope;
   state.lastTotal = total;
   state.currentResult = results.length ? 0 : -1;
+  // Détail des rangs quand des résultats approchés existent (v1.2.3) :
+  // « — 5 exacts, 7 approchés ».
+  const exactN = tierCounts ? tierCounts.exact : total;
+  const approxN = total - exactN;
   const status = total === 0
     ? `Aucun résultat pour « ${query} ». Essayez un autre mot, en français ou en anglais (ex. : décrochage, fuel, volets).`
     : `${total} résultat${total > 1 ? 's' : ''} pour « ${query} »` +
       (terms.length > 1 ? ` (termes cherchés : ${terms.join(', ')})` : '') +
+      (approxN > 0 ? ` — ${exactN} exact${exactN > 1 ? 's' : ''}, ${approxN} approché${approxN > 1 ? 's' : ''}` : '') +
       (truncated ? ` — affichage limité aux ${results.length} premiers.` : '');
   $('searchStatus').textContent = status;
   updateResultCounter();
