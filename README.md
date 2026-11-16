@@ -125,3 +125,28 @@ réseau ensuite.
 Voir `RAPPORT-VERIFICATION.md` : les 16 points de la checklist, ce qui a été
 vérifié et comment (tests réels dans l'appli, pas une revue de code seule),
 et les points restés ouverts.
+
+## v1.2.2 (16 nov. 2026) — lecture du texte des PDF scannés réparée
+
+Cause racine : le paquet ne livrait pas les décodeurs WASM de pdf.js
+(`jbig2.wasm`, `openjpeg.wasm`, `qcms_bg.wasm` + replis JS) et `wasmUrl`
+n'était jamais renseigné. Les images CCITT Groupe 4 (le cas du 172N de
+Julien, 242 pages, 600 ppp) ne se décodaient pas : chaque page rendait
+blanche, la lecture du texte tournait à vide en quelques secondes et
+rendait 0 caractère. Correctif : les 5 fichiers WASM sont livrés dans
+`assets/pdfjs/wasm/`, `wasmUrl` est passé aux deux rendus pdf.js, et la
+lecture du texte est devenue impossible à rater : démarrage automatique
+après l'import d'un document scanné, arrêt net après 5 pages blanches
+d'affilée avec un message clair, bouton « Rendre cherchable » sur la
+carte de tout document sans texte, et bannière de reprise à chaque
+lancement pour ces documents (le 172N déjà importé se répare sans
+réimportation). Le mot « OCR » n'apparaît nulle part dans l'interface
+(« lecture du texte », « Rendre cherchable »). Vérifié : auto-test
+Electron 59/59 (dont 11 vérifications CCITT : page rendue avec de
+l'encre, texte trouvé, recherche « fuel » = 1 page), suites Node
+377/377 avec `POH_TEST_OCR=1`, et `ai:ask` de bout en bout (6 extraits
+de contexte envoyés, réponse affichée, sources cliquables) — la
+recherche IA « dans le vide » venait de l'index vide, pas de `ai:ask`.
+Aussi : `retention-days: 1` sur les deux artefacts Actions du workflow
+(52 artefacts = 13 206 Mo avaient saturé le quota gratuit GitHub de
+500 Mo ; les releases ne sont pas touchées).

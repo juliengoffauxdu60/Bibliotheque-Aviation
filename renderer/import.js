@@ -22,6 +22,11 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = 'app://assets/pdfjs/pdf.worker.mjs';
 
 const OCR_RENDER_SCALE = 2; // ~200 ppp sur une page lettre : bon compromis vitesse/qualité OCR.
 
+// Une page rendue BLANCHE donne un PNG minuscule — mais on ne juge pas
+// sur la taille du PNG (trop variable) : on compte l'encre sur un aperçu
+// réduit. 5 pages vides d'affilée = le lecteur ne lit pas les images.
+const BLANK_STREAK_MAX = 5;
+
 const state = {
   imported: [], // entrées meta.json (registre userData/pohs)
   ocrCancelRequested: false,
@@ -59,6 +64,8 @@ function injectStyles() {
 #importProgress .prog-actions { margin-top: 6px; }
 #importProgress button { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: #fff; }
 .doc-card { position: relative; }
+.doc-card .doc-ocr-btn { display: block; margin-top: 6px; padding: 6px 10px; border-radius: 8px; border: 1px solid #8a6d00; background: #fff3c4; color: #5c4a00; font-weight: 700; font-size: 12px; cursor: pointer; }
+.doc-card .doc-ocr-btn:hover { background: #ffe98a; }
 .doc-card .doc-delete { position: absolute; top: 4px; right: 6px; width: 22px; height: 22px; line-height: 20px; text-align: center; border-radius: 50%; border: 1px solid #d5dde4; background: #fff; color: #a33; font-size: 13px; font-weight: 700; cursor: pointer; padding: 0; }
 .doc-card .doc-delete:hover { background: #fdecec; border-color: #a33; }`;
   document.head.appendChild(st);
@@ -133,6 +140,7 @@ function decorateImportedDocs() {
     if (card.querySelector('.doc-delete')) continue;
     const docId = card.dataset.doc;
     const title = (card.querySelector('.doc-name') || {}).textContent || docId;
+    const entry = state.imported.find((x) => x.doc_id === docId);
     const del = document.createElement('button');
     del.type = 'button';
     del.className = 'doc-delete';
@@ -141,11 +149,36 @@ function decorateImportedDocs() {
     del.textContent = '✕';
     del.addEventListener('click', (e) => {
       e.stopPropagation(); e.preventDefault();
-      const entry = state.imported.find((x) => x.doc_id === docId);
       onDeleteClick(entry || { doc_id: docId, title });
     });
     card.appendChild(del);
+    // v1.2.2 : document sans texte -> bouton de reprise direct sur la carte
+    // (lecture annulée, ou ratée avant le correctif WASM — pas besoin de
+    // réimporter, la lecture repart du PDF déjà stocké).
+    if (needsTextReading(entry)) {
+      const ocrBtn = document.createElement('button');
+      ocrBtn.type = 'button';
+      ocrBtn.className = 'doc-ocr-btn';
+      ocrBtn.title = 'Lire le texte des pages pour rendre ce document cherchable';
+      ocrBtn.textContent = 'Rendre cherchable';
+      ocrBtn.addEventListener('click', (e) => {
+        e.stopPropagation(); e.preventDefault();
+        startOcr(docId);
+      });
+      card.appendChild(ocrBtn);
+    }
   }
+}
+
+// Un document a besoin de sa lecture du texte : scanné, jamais lu
+// (source 'import', pas 'ocr'). C'est le cas du 172N importé en v1.2.1
+// dont la lecture a tourné à vide (pages blanches, décodeur WASM absent)
+// : il doit pouvoir être relu SANS réimportation.
+function needsTextReading(entry) {
+  if (!entry || entry.scanned !== true) return false;
+  if (entry.source === 'ocr') return false;
+  if (entry.doc && entry.doc.ocr) return false;
+  return true;
 }
 
 async function refreshImported() {
@@ -197,15 +230,16 @@ async function importFilePath(filePath) {
     if (res.scanned) {
       // Le document est enregistré (PDF lisible), mais son index est vide :
       // la recherche ne marchera pas dessus sans lecture du texte.
-      // On le dit clairement.
+      // v1.2.2 : la lecture DÉMARRE TOUTE SEULE (avant, il fallait cliquer
+      // sur le bouton — le document restait silencieusement vide si on
+      // l'oubliait). Annulable à tout moment (bouton sous la progression) ;
+      // la reprise reste possible depuis la carte du document.
       state.pendingScannedDocId = res.doc_id;
-      $('importWarningText').textContent =
-        `Aucun texte n’a été trouvé dans ce PDF (médiane ${res.medianChars} caractères par page, ` +
-        `sur ${res.totalPages} pages) : il s’agit probablement d’un document scanné. ` +
-        `La recherche ne trouvera rien dans « ${res.title} » tant que le texte n’a pas été lu. ` +
-        `La lecture du texte est intégrée à l’application (français + anglais, 100 % locale) : elle prend quelques secondes par page.`;
-      $('importWarning').hidden = false;
-      setStatus(`« ${res.title} » ajouté (${res.totalPages} pages), sans texte. Lancez la lecture du texte ci-dessous pour le rendre cherchable.`, '');
+      setStatus(`« ${res.title} » ajouté (${res.totalPages} pages), sans texte. ` +
+        (window.__pohImportNoAutoOcr
+          ? 'Lancez la lecture du texte depuis sa carte pour le rendre cherchable.'
+          : 'Lecture du texte lancée automatiquement…'), '');
+      if (!window.__pohImportNoAutoOcr) startOcr(res.doc_id);
       return res;
     }
     const sec = res.sectionDetection === 'none'
@@ -220,6 +254,20 @@ async function importFilePath(filePath) {
   } finally {
     $('importAddBtn').disabled = false;
   }
+}
+
+// Page rendue vide ? Aperçu réduit (110×170) : une page avec du texte a
+// toujours des pixels sombres ; une page blanche n'en a aucun. Bon marché
+// (un getImageData sur ~18 700 pixels) et indépendant de la compression PNG.
+const blankProbe = document.createElement('canvas');
+function pageLooksBlank(canvas) {
+  const w = 110, h = 170;
+  blankProbe.width = w; blankProbe.height = h;
+  const bctx = blankProbe.getContext('2d');
+  bctx.drawImage(canvas, 0, 0, w, h);
+  const d = bctx.getImageData(0, 0, w, h).data;
+  for (let i = 0; i < d.length; i += 4) if (d[i] < 128) return false;
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -242,10 +290,14 @@ async function startOcr(docId) {
       disableRange: true,
       disableStream: true,
       isEvalSupported: false,
+      // v1.2.2 : voir renderer/app.js — sans wasmUrl, les images CCITT
+      // (JBIG2) et JPEG2000 ne se décodent pas et les pages rendent blanches.
+      wasmUrl: 'app://assets/pdfjs/wasm/',
     }).promise;
     const total = pdf.numPages;
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
+    let blankStreak = 0;
     for (let p = 1; p <= total; p++) {
       if (state.ocrCancelRequested) {
         await a.ocrCancel(docId).catch(() => {});
@@ -259,6 +311,22 @@ async function startOcr(docId) {
       canvas.width = Math.floor(viewport.width);
       canvas.height = Math.floor(viewport.height);
       await page.render({ canvasContext: ctx, viewport }).promise;
+      // Garde anti-pages-vides (v1.2.2, 172N) : si le rendu sort des pages
+      // blanches, la reconnaissance rend 0 caractère en quelques centièmes
+      // de seconde par page et la boucle tourne 242 pages « à vide » avant
+      // d'échouer. On s'arrête avec un message clair au lieu de laisser
+      // croire que la lecture a eu lieu.
+      if (pageLooksBlank(canvas)) {
+        blankStreak++;
+        if (blankStreak >= BLANK_STREAK_MAX) {
+          await a.ocrCancel(docId).catch(() => {});
+          hideProgress();
+          setStatus(`Lecture du texte arrêtée à la page ${p} sur ${total} : les pages rendues sont vides — les images de ce PDF ne peuvent pas être lues. Le document reste affichable, mais la recherche restera vide pour lui.`, 'error');
+          return null;
+        }
+      } else {
+        blankStreak = 0;
+      }
       const pngBase64 = canvas.toDataURL('image/png').split(',')[1];
       // Dimensions du PNG envoyé : sans elles, les boîtes de mots OCR (en
       // pixels d'image) ne pourraient pas être replacées sur la page.
@@ -327,6 +395,20 @@ async function init() {
   injectStyles();
   buildImportBox();
   await refreshImported();
+  // Reprise au démarrage (v1.2.2) : un document déjà importé mais sans
+  // texte (lecture annulée, ou ratée avant le correctif WASM) propose de
+  // nouveau sa lecture — sans réimportation. Le bouton reste aussi sur sa
+  // carte (« Rendre cherchable »).
+  const pending = state.imported.find(needsTextReading);
+  if (pending) {
+    state.pendingScannedDocId = pending.doc_id;
+    $('importWarningText').textContent =
+      `« ${pending.title} » n’a pas de texte : il s’agit probablement d’un document scanné. ` +
+      `La recherche ne trouvera rien dedans tant que le texte n’a pas été lu. ` +
+      `La lecture du texte est intégrée à l’application (français + anglais, 100 % locale) : elle prend quelques secondes par page.`;
+    $('importWarning').hidden = false;
+    setStatus(`« ${pending.title} » est sans texte : lancez sa lecture du texte pour le rendre cherchable.`, '');
+  }
 }
 
 const ready = (async () => {
@@ -350,6 +432,10 @@ window.__pohImport = {
   list: () => refreshImported(),
   importFile: (filePath) => importFilePath(filePath),
   startOcr: (docId) => startOcr(docId),
+  needsTextReading: (docId) => {
+    const entry = state.imported.find((e) => e.doc_id === docId);
+    return needsTextReading(entry);
+  },
   deleteDoc: (docId) => {
     const entry = state.imported.find((e) => e.doc_id === docId);
     if (entry) return onDeleteClick(entry);

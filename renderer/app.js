@@ -181,6 +181,11 @@ async function getPdfDoc(docId) {
     disableRange: true,   // un seul téléchargement, pas de requêtes par morceaux
     disableStream: true,
     isEvalSupported: false,
+    // v1.2.2 : dossier des décodeurs WASM pdf.js (JBIG2/CCITT G4, JPEG2000,
+    // profils ICC). Sans lui, les images CCITT/JBIG2 ne se décodent pas et
+    // les pages scannées rendent BLANCHES (172N, 16 nov. 2026 — la lecture
+    // du texte tournait alors à vide, 0 caractère sur 242 pages).
+    wasmUrl: 'app://assets/pdfjs/wasm/',
   }).promise.then((pdf) => {
     state.pdfDocs[docId] = pdf;
     return pdf;

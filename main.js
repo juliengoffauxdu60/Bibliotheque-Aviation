@@ -28,6 +28,7 @@ const SELFTEST_SHOTS = process.env.POH_SELFTEST_SHOTS || '';
 // stall = 1 page, « stall speed » = 1 page, « pression d'huile » = 1 page
 // (via « oil pressure »), sections 1/2/3 en p. 1/2/3.
 const SELFTEST_FIXTURE = path.join(__dirname, 'test', 'fixtures', 'fixture-3p.pdf');
+const SELFTEST_CCITT = path.join(__dirname, 'test', 'fixtures', 'ccitt-1p.pdf');
 // Garde-fou : did-finish-load se déclenche à CHAQUE rechargement — sans
 // lui, chaque reload de l'auto-test (après import, après suppression)
 // relancerait runSelfTest en entier, en concurrence avec l'exécution en
@@ -38,6 +39,10 @@ const MIME = {
   '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript',
   '.css': 'text/css', '.json': 'application/json', '.pdf': 'application/pdf',
   '.png': 'image/png', '.svg': 'image/svg+xml',
+  // v1.2.2 : les décodeurs d'images pdf.js (JBIG2/CCITT, JPEG2000) sont des
+  // .wasm servis depuis assets/pdfjs/wasm/ — sans ce type MIME, le
+  // chargement WASM échoue et les pages scannées rendent vides.
+  '.wasm': 'application/wasm',
 };
 
 function createWindow() {
@@ -419,6 +424,57 @@ async function runSelfTest(win) {
     `(() => { const id = document.querySelector('.doc-card').dataset.doc; return window.pohDesktop.import.deleteDoc(id).then(r => { const s = 'ok=' + r.ok + ' doc=' + id; window.location.reload(); return s; }); })()`,
     (v) => v.startsWith('ok=true doc='));
   await step('supprimer le fixture : après rechargement, retour à 0 document',
+    WAIT_READY,
+    (v) => v === 'docs=0 pages=0 cartes=0 ajout=visible message=oui');
+
+  // (f) Non-régression WASM (v1.2.2, 172N) : le fixture CCITT (1 page
+  // scannée, image CCITT Groupe 4, vrai texte) doit rendre une page AVEC
+  // de l'encre (sans wasmUrl, la page rend blanche : 0 pixel) et sa lecture
+  // du texte doit trouver du texte — sinon c'est le bug du 16 nov. 2026
+  // (242 pages à vide, 0 caractère). La lecture auto après import est
+  // inhibée ici (crochet de test) pour garder le flux déterministe.
+  const CCITT = JSON.stringify(SELFTEST_CCITT);
+  await step('CCITT : import du fixture 1 page (détecté scanné)',
+    `window.__pohImportNoReload = true; window.__pohImportNoAutoOcr = true; window.__pohImport.importFile(${CCITT}).then(r => 'ok=' + r.ok + ' pages=' + r.totalPages + ' scanne=' + r.scanned)`,
+    (v) => v === 'ok=true pages=1 scanne=true');
+
+  await step('CCITT : rechargement après import',
+    `window.location.reload(); 'rechargement demandé'`,
+    (v) => v === 'rechargement demandé');
+
+  await step('CCITT : après rechargement, 1 document, 1 page, carte présente',
+    WAIT_READY,
+    (v) => v === 'docs=1 pages=1 cartes=1 ajout=visible message=non');
+
+  await step('CCITT : bannière de reprise + bouton carte + besoin de lecture',
+    `(() => { const id = document.querySelector('.doc-card').dataset.doc; return 'banniere=' + (document.querySelector('#importWarning').hidden ? 'masquee' : 'visible') + ' bouton=' + (document.querySelector('.doc-ocr-btn') ? 'oui' : 'non') + ' besoin=' + window.__pohImport.needsTextReading(id); })()`,
+    (v) => v === 'banniere=visible bouton=oui besoin=true');
+
+  await step('CCITT : page 1 rendue avec de l\u2019encre (décodeur WASM)',
+    `(async () => { const id = document.querySelector('.doc-card').dataset.doc; await window.__poh.goToDoc(id); const s = await window.__poh.goToPage(1); return 'page=' + s.page + ' erreur=' + s.error + ' pixels=' + window.__poh.nonBlankPixels(); })()`,
+    (v) => { const m = /page=(\d+) erreur=(\S+) pixels=(\d+)/.exec(v); return !!m && m[1] === '1' && m[2] === 'aucune' && +m[3] > 0; });
+  await shot('08-ccitt-rendu');
+
+  await step('CCITT : lecture du texte trouve du texte (médiane > 0)',
+    `window.__pohImportNoReload = true; window.__pohImport.startOcr(document.querySelector('.doc-card').dataset.doc).then(d => 'ok=' + (d && d.ok) + ' median=' + (d && d.medianChars))`,
+    (v) => { const m = /ok=(true) median=(\d+)/.exec(v); return !!m && +m[2] > 0; });
+
+  await step('CCITT : rechargement après lecture du texte',
+    `window.location.reload(); 'rechargement demandé'`,
+    (v) => v === 'rechargement demandé');
+
+  await step('CCITT : après rechargement, 1 document, 1 page',
+    WAIT_READY,
+    (v) => v === 'docs=1 pages=1 cartes=1 ajout=visible message=non');
+
+  await step('CCITT : recherche « fuel » trouve 1 page (texte indexé)',
+    `window.__poh.search('fuel').then(r => 'n=' + r.total)`,
+    (v) => v === 'n=1');
+
+  await step('CCITT : supprimer le fixture, retour à 0 document',
+    `(() => { const id = document.querySelector('.doc-card').dataset.doc; return window.pohDesktop.import.deleteDoc(id).then(r => { const s = 'ok=' + r.ok + ' doc=' + id; window.location.reload(); return s; }); })()`,
+    (v) => v.startsWith('ok=true doc='));
+  await step('CCITT : après suppression, retour à 0 document',
     WAIT_READY,
     (v) => v === 'docs=0 pages=0 cartes=0 ajout=visible message=oui');
 

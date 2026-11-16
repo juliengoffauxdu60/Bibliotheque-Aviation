@@ -72,6 +72,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bibliotheque-aviation-windows
+          # v1.2.2 : 1 jour suffit — le job `release` consomme les artefacts
+          # dans les minutes qui suivent. Sans cela, chaque run téléverse
+          # ~450 Mo conservés 90 jours (quota gratuit : 500 Mo — atteint le
+          # 16 nov. 2026 avec 52 artefacts / 13 206 Mo).
+          retention-days: 1
           path: |
             dist/*.exe
             dist/*.blockmap
@@ -103,6 +108,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bibliotheque-aviation-macos
+          # v1.2.2 : voir le job Windows — 1 jour suffit, le job `release`
+          # consomme les artefacts dans les minutes qui suivent.
+          retention-days: 1
           path: |
             dist/*.dmg
             dist/*.blockmap

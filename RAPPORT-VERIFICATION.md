@@ -219,3 +219,40 @@ l'intérieur du lecteur (point 11).
 - **Page 39 du 172N** : rendu vérifié sans erreur ; le décalage du scan
   est dans le PDF source et rendu tel quel (pas de retouche possible ni
   souhaitée).
+
+## v1.2.2 (16 nov. 2026) — WASM pdf.js + lecture du texte robuste
+
+- **Cause racine prouvée par reproduction** : le 172N de Julien
+  (242 pages, images CCITT Groupe 4) rendait 0 pixel sombre par page
+  dans la configuration v1.2.1 (sans `wasmUrl`) — `JBig2 failed to
+  initialize` — et 55 605 pixels (5,74 %) sur la page 1 avec `wasmUrl`.
+  Le worker tesseract.js et les données fra+eng étaient hors de cause
+  (la lecture Node du PNG rendu par poppler trouve 2 228 caractères
+  sur la page 2). Le code de lecture n'a pas changé entre v1.2.0 et
+  v1.2.1 : c'est un manque de paquetage latent, exposé par ce document.
+- **Correctif** : `assets/pdfjs/wasm/` (jbig2 + openjpeg + qcms,
+  md5 identiques à pdfjs-dist), MIME `.wasm` dans `main.js`, `wasmUrl`
+  dans `renderer/app.js` et `renderer/import.js`. Garde de pages
+  blanches (5 d'affilée), démarrage automatique, bouton « Rendre
+  cherchable », reprise au lancement. Test non-régression
+  `test/ocr-wasm.test.mjs` (28 vérifications avec `POH_TEST_OCR=1`,
+  dont la lecture réelle du fixture CCITT : 103 caractères, 5 lignes).
+- **Auto-test Electron** : 59/59 (48 anciennes + 11 CCITT : import
+  scanné, bannière + bouton de reprise, page avec encre = 211 pixels,
+  lecture du texte médiane 103, recherche « fuel » = 1 page,
+  suppression). Un bug introduit par le bouton de reprise (`entry`
+  hors de portée dans `decorateImportedDocs`, qui tuait `init()` et
+  masquait bannière + bouton) a été trouvé par l'auto-test (58/59)
+  puis corrigé — 59/59 ensuite.
+- **Suites Node** : 377/377 avec `POH_TEST_OCR=1` (search 25, import
+  86 + 2 ignorés, ai 122, highlight 32, highlight-vertical 9,
+  layered 44, refresh 31, ocr-wasm 28). **E2E IA** : question → réponse
+  affichée, 6 extraits envoyés, sources cliquables (la recherche IA
+  « dans le vide » venait de l'index vide du 172N, pas de `ai:ask`).
+- **Workflow** : `retention-days: 1` sur les deux
+  `actions/upload-artifact@v4` (quota GitHub 500 Mo saturé par
+  52 artefacts = 13 206 Mo ; les releases ne sont pas touchées).
+- **Non vérifié** : l'app installée sur le Mac de Julien (c'est lui
+  le vrai test) — installer v1.2.2 puis cliquer « Rendre cherchable »
+  sur la carte du 172N, ou laisser la bannière de reprise le proposer
+  au lancement ; la lecture des 242 pages prend ~10-15 min.

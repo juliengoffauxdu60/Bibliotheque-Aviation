@@ -85,3 +85,28 @@ Patchs d'intégration appliqués après les livraisons des agents import/OCR et 
 - Dépôt GitHub BLOQUÉ : la création via le connecteur échoue (403, l'appli
   GitHub ne peut pas créer de dépôt). Julien doit créer lui-même le dépôt
   privé vide « recherche-poh », puis donner l'accès à l'appli Muse.
+
+## v1.2.2 (16 nov. 2026) — WASM pdf.js + lecture du texte robuste
+
+- **Bug** : le 172N scanné de Julien (242 pages, images CCITT Groupe 4)
+  rendait des pages blanches dans le paquet v1.2.1 : pdf.js décode ces
+  images avec son décodeur WASM `jbig2.wasm`, qui n'était ni livré dans
+  `assets/pdfjs/` ni renseigné (`wasmUrl` absent) — la lecture du texte
+  défilait à vide et rendait 0 caractère. **Correctif** : les 5 fichiers
+  WASM sont livrés (`assets/pdfjs/wasm/`, couverts par `build.files`
+  `assets/pdfjs/**`), MIME `.wasm` dans le gestionnaire de protocole
+  `app://`, `wasmUrl` dans les deux `getDocument` du rendu.
+- **Robustesse** : démarrage automatique de la lecture du texte après
+  l'import d'un document scanné ; arrêt après 5 pages blanches
+  d'affilée avec message clair ; bouton « Rendre cherchable » sur la
+  carte de tout document sans texte ; bannière de reprise à chaque
+  lancement. Un document déjà importé (le 172N) se répare sans
+  réimportation. Le mot « OCR » n'apparaît nulle part dans l'interface.
+- **Tests** : auto-test Electron 59/59 (11 vérifications CCITT),
+  suites Node 377/377 (`POH_TEST_OCR=1`), E2E IA OK (6 extraits).
+  Nouveau fixture `test/fixtures/ccitt-1p.pdf` (1 page, CCITT G4,
+  5 lignes de texte réel, généré par `scripts/make-ccitt-fixture.py` —
+  une seule bande G4 par image : plusieurs bandes concaténées forment
+  un flux G4 invalide et seule la 1re ligne rend).
+- **Workflow** : `retention-days: 1` sur les deux artefacts Actions
+  (quota gratuit GitHub 500 Mo saturé par 52 artefacts = 13 206 Mo).
