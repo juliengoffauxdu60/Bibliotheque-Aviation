@@ -24,4 +24,16 @@ contextBridge.exposeInMainWorld('pohDesktop', {
     test: () => ipcRenderer.invoke('ai:test'),
     openSettings: () => ipcRenderer.invoke('ai:open-settings'),
   },
+  // Mise à jour automatique (v1.2.5) : réglage, vérification,
+  // téléchargement, installation. Les événements de progression
+  // arrivent par onStatus — le téléchargement est trop long pour une
+  // réponse IPC (limite 30 s).
+  update: {
+    getSettings: () => ipcRenderer.invoke('update:get-settings'),
+    setSettings: (patch) => ipcRenderer.invoke('update:set-settings', patch),
+    checkNow: () => ipcRenderer.invoke('update:check-now'),
+    download: () => ipcRenderer.invoke('update:download'),
+    install: () => ipcRenderer.invoke('update:install'),
+    onStatus: (cb) => ipcRenderer.on('update:status', (_event, payload) => cb(payload)),
+  },
 });

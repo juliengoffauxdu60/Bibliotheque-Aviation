@@ -38,6 +38,19 @@
     <p id="aiSettingsStatus" class="ai-status" aria-live="polite"></p>
   </form>
 
+  <section class="update-settings" aria-label="Mises à jour">
+    <h2>Mises à jour</h2>
+    <label class="update-auto-label" for="updateAutoCheck">
+      <input type="checkbox" id="updateAutoCheck" checked>
+      Vérifier automatiquement les mises à jour au démarrage
+    </label>
+    <p class="ai-note">Quand une nouvelle version est publiée, l’application la télécharge et vous propose de l’installer au redémarrage. Si la vérification échoue (pas d’accès aux versions), l’application continue normalement et vous pouvez réessayer ici.</p>
+    <div class="ai-settings-actions">
+      <button type="button" id="updateCheckNowBtn">Vérifier maintenant</button>
+    </div>
+    <p id="updateSettingsStatus" class="ai-status" aria-live="polite"></p>
+  </section>
+
   <p class="ai-note">Un seul fournisseur est actif à la fois. La recherche et le lecteur PDF fonctionnent toujours sans IA, même sans Internet.</p>
 </main>
 <script type="module" src="./ai-settings.js"></script>

@@ -10,6 +10,8 @@
       "main.js",
       "main-import.js",
       "main-ai.js",
+      "main-update.js",
+      "main/**/*",
       "import-core.js",
       "preload.cjs",
       "renderer/**/*",
@@ -24,7 +26,7 @@
     "mac": {
       "hardenedRuntime": false,
       "identity": "-",
-      "target": "dmg"
+      "target": ["dmg", "zip"]
     },
     "productName": "Bibliotheque Aviation",
     "publish": {
@@ -38,6 +40,7 @@
     }
   },
   "dependencies": {
+    "electron-updater": "^6.8.12",
     "pdfjs-dist": "^6.5.438",
     "tesseract.js": "^6.0.1"
   },
@@ -60,8 +63,8 @@
     "dist:mac": "electron-builder --mac --x64 --arm64 --publish never",
     "selftest": "node scripts/selftest.js",
     "start": "electron .",
-    "test": "node test/search.test.mjs"
+    "test": "node test/run-all.mjs"
   },
-  "version": "1.2.4",
+  "version": "1.2.5",
   "type": "module"
 }

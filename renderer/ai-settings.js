@@ -91,6 +91,76 @@ function fillProviderDefaults(id, { force = false } = {}) {
     : 'Aucune clé enregistrée.';
 }
 
+function updateApi() {
+  return window.pohDesktop && window.pohDesktop.update ? window.pohDesktop.update : null;
+}
+
+function setUpdateStatus(text, isError) {
+  const el = $('updateSettingsStatus');
+  if (!el) return;
+  el.textContent = text || '';
+  el.classList.toggle('ai-error', Boolean(isError));
+}
+
+// Les réglages de mise à jour se chargent à part, avec leur propre
+// erreur : un échec ici ne doit jamais cacher les réglages IA.
+async function refreshUpdateSettings() {
+  const api = updateApi();
+  const box = $('updateAutoCheck');
+  if (!api || !box) return;
+  try {
+    const settings = await withTimeout(api.getSettings(), LOAD_TIMEOUT_MS, 'Impossible de lire le réglage des mises à jour.');
+    box.checked = settings ? settings.autoUpdate !== false : true;
+  } catch {
+    box.checked = true;
+  }
+}
+
+function bindUpdateSettings() {
+  const box = $('updateAutoCheck');
+  if (box) {
+    box.addEventListener('change', async () => {
+      const api = updateApi();
+      if (!api) {
+        setUpdateStatus('La fonction de mise à jour n’est pas branchée dans cette application.', true);
+        return;
+      }
+      try {
+        await withTimeout(api.setSettings({ autoUpdate: box.checked }), SAVE_TIMEOUT_MS, SAVE_TIMEOUT_MESSAGE);
+        setUpdateStatus(box.checked
+          ? 'Vérification automatique activée.'
+          : 'Vérification automatique désactivée. Vous pourrez toujours vérifier manuellement ici.');
+      } catch {
+        setUpdateStatus('Impossible d’enregistrer ce réglage.', true);
+      }
+    });
+  }
+  const checkBtn = $('updateCheckNowBtn');
+  if (checkBtn) {
+    checkBtn.addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      const api = updateApi();
+      if (!api) {
+        setUpdateStatus('La fonction de mise à jour n’est pas branchée dans cette application.', true);
+        return;
+      }
+      if (btn) btn.disabled = true;
+      try {
+        setUpdateStatus('Vérification en cours…');
+        const res = await withTimeout(api.checkNow(), LOAD_TIMEOUT_MS, 'La vérification n’a pas répondu à temps. Réessayez.');
+        setUpdateStatus(res && res.available
+          ? `Une mise à jour est disponible : version ${res.version}. Fermez cette fenêtre pour la voir en haut de la page principale.`
+          : 'L’application est à jour.');
+      } catch (err) {
+        setUpdateStatus((err && err.message) || 'Impossible de vérifier les mises à jour.', true);
+      } finally {
+        if (btn) btn.disabled = false;
+        if (btn) btn.blur();
+      }
+    });
+  }
+}
+
 async function refresh() {
   const api = aiApi();
   if (!api) {
@@ -254,7 +324,9 @@ function bind() {
 }
 
 bind();
+bindUpdateSettings();
 refresh();
+refreshUpdateSettings();
 
 // API pour les tests (auto-test IA).
 window.__pohAiSettings = {
@@ -265,6 +337,9 @@ window.__pohAiSettings = {
     endpoint: $('aiEndpoint').value,
     keyState: $('aiKeyState').textContent,
     status: $('aiSettingsStatus').textContent,
+    updateAutoChecked: $('updateAutoCheck') ? $('updateAutoCheck').checked : null,
+    updateCheckNowPresent: Boolean($('updateCheckNowBtn')),
+    updateStatus: $('updateSettingsStatus') ? $('updateSettingsStatus').textContent : '',
   }),
   save: async (values) => {
     if (values.provider) { $('aiProvider').value = values.provider; fillProviderDefaults(values.provider, { force: true }); }

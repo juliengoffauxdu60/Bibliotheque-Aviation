@@ -168,6 +168,19 @@ main { padding: 14px 22px 8px; }
   background: #fff3c4; color: #5c4a00; font-size: 13px; padding: 8px 14px;
   border-bottom: 1px solid #e8d27a;
 }
+/* Bannière de mise à jour (v1.2.5) : même aspect que la bannière de
+   lecture du texte, en haut de la page, avec ses deux boutons. */
+.update-banner {
+  background: #fff3c4; color: #5c4a00; font-size: 13px; padding: 8px 14px;
+  border-bottom: 1px solid #e8d27a;
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+}
+.update-banner[hidden] { display: none; }
+.update-banner-btn {
+  padding: 5px 12px; border-radius: 8px; border: 1px solid #8a6d00;
+  background: #fff; color: #5c4a00; font-weight: 700; font-size: 13px;
+}
+.update-banner-btn-quiet { background: transparent; border-color: transparent; font-weight: 600; }
 .pdf-scroll { flex: 1 1 auto; overflow: auto; padding: 18px 18px 78px; }
 /* En « Page entière », pas de marge basse : la page doit tenir sans défilement. */
 .pdf-scroll.fit-mode { padding-bottom: 18px; }

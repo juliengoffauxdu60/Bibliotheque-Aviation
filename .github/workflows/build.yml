@@ -50,6 +50,16 @@
 # La signature parfaite (Developer ID + notarisation, zéro message)
 # demanderait un compte Apple Developer payant — pas en place.
 #
+# MISE À JOUR AUTOMATIQUE (v1.2.5, 17 nov. 2026) : la Release contient
+# aussi les fichiers du flux de l'updater — latest.yml (Windows),
+# latest-mac.yml + les ZIP Mac (macOS, cible zip ajoutée) — envoyés par
+# les mêmes `gh release upload`, toujours ZÉRO artefact. L'appli lit
+# ces fichiers en HTTPS anonyme (aucun jeton dans l'appli) ; sur macOS
+# l'installation est maison (remplacement du .app, Squirrel refuse les
+# signatures ad-hoc) — voir main/update-feed.js et main/mac-update.js.
+# Les ZIP et les latest-*.yml sont des assets de Release : ils ne
+# comptent pas dans le quota des artefacts Actions.
+#
 # Chaque tag v* publie une Release GitHub avec l'exe et les DMG en
 # téléchargement direct. Pas de DMG universel : le fusionneur
 # d'electron-builder refuse le module natif canvas
@@ -109,11 +119,11 @@ jobs:
       - name: Construire l'installateur Windows
         run: npm run dist
 
-      - name: Envoyer l'installateur vers la Release
+      - name: Envoyer l'installateur et le flux de mise à jour vers la Release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" dist/*.exe dist/*.blockmap --clobber
+        run: gh release upload "${{ github.ref_name }}" dist/*.exe dist/*.blockmap dist/latest.yml --clobber
 
   build-macos:
     runs-on: macos-latest
@@ -134,14 +144,14 @@ jobs:
       - name: Tests du moteur de recherche
         run: npm test
 
-      - name: Construire les DMG macOS
+      - name: Construire les DMG et ZIP macOS
         run: npm run dist:mac
 
-      - name: Envoyer les DMG vers la Release
+      - name: Envoyer les DMG, ZIP et le flux de mise à jour vers la Release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" dist/*.dmg dist/*.blockmap --clobber
+        run: gh release upload "${{ github.ref_name }}" dist/*.dmg dist/*.zip dist/*.blockmap dist/latest-mac.yml --clobber
 
   publish-release:
     runs-on: ubuntu-latest

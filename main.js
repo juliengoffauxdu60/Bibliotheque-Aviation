@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { registerImportHandlers } from './main-import.js';
 import { registerAiHandlers } from './main-ai.js';
+import { initUpdate } from './main-update.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -117,6 +118,9 @@ app.whenReady().then(() => {
   registerImportHandlers();
   // Réglages IA : stockage sécurisé de la clé + appels au fournisseur.
   registerAiHandlers();
+  // Mise à jour automatique (v1.2.5) : réglage, vérification au
+  // démarrage puis toutes les 6 h, téléchargement, installation.
+  initUpdate(win);
 
   if (SELFTEST) {
     win.webContents.on('console-message', (e, level, message, line, sourceId) => {
@@ -186,6 +190,17 @@ async function runSelfTest(win) {
     try {
       const value = await wc.executeJavaScript(js);
       await new Promise((r) => setTimeout(r, 400));
+      const ok = check ? check(value) : value === true;
+      out.push({ name, ok: !!ok, detail: typeof value === 'string' ? value : JSON.stringify(value) });
+    } catch (e) {
+      out.push({ name, ok: false, detail: 'ERREUR : ' + e.message });
+    }
+  };
+  // Assertions du PROCESSUS PRINCIPAL (fichiers sur disque, fenêtres) —
+  // le rendu ne peut pas les voir : exécutées ici, dans main.js.
+  const stepMain = async (name, fn, check) => {
+    try {
+      const value = await fn();
       const ok = check ? check(value) : value === true;
       out.push({ name, ok: !!ok, detail: typeof value === 'string' ? value : JSON.stringify(value) });
     } catch (e) {
@@ -477,6 +492,78 @@ async function runSelfTest(win) {
   await step('CCITT : après suppression, retour à 0 document',
     WAIT_READY,
     (v) => v === 'docs=0 pages=0 cartes=0 ajout=visible message=oui');
+
+  // (g) Mise à jour automatique (v1.2.5) : contre un FAUX flux local
+  // (scripts/selftest.js démarre le serveur et passe POH_UPDATE_FEED,
+  // POH_UPDATE_FAKE_PLATFORM=darwin, POH_UPDATE_TEST_APP=<fausse .app>).
+  // Preuve du flux complet vérification -> téléchargement -> vérification
+  // d'empreinte -> remplacement, sans GitHub. Le remplacement d'un VRAI
+  // .app sur macOS et le quitAndInstall Windows ne peuvent pas être
+  // prouvés sur Linux : ils restent à confirmer sur le Mac et le PC de
+  // Julien (voir manifeste v1.2.5).
+  await step('mise à jour : réglage par défaut activé',
+    `window.pohDesktop.update.getSettings().then(s => 'auto=' + s.autoUpdate)`,
+    (v) => v === 'auto=true');
+
+  await step('mise à jour : vérification trouve la 9.9.9 (flux local)',
+    `window.__pohUpdate.checkNow().then(r => 'dispo=' + r.available + ' version=' + r.version + ' actuelle=' + r.currentVersion)`,
+    (v) => v === 'dispo=true version=9.9.9 actuelle=1.2.5');
+
+  await step('mise à jour : bannière visible avec la version 9.9.9',
+    `window.__pohUpdate.bannerText()`,
+    (v) => v.includes('9.9.9'));
+
+  await step('mise à jour : téléchargement + vérification d’empreinte, prêt à installer',
+    `(async () => { await window.__pohUpdate.download(); const t0 = Date.now(); while (Date.now() - t0 < 10000) { const s = window.__pohUpdate.state(); if (s.ready) return 'pret=true version=' + s.version; if (s.error) return 'pret=false erreur=' + s.error; await new Promise(r => setTimeout(r, 200)); } return 'pret=false delai'; })()`,
+    (v) => v === 'pret=true version=9.9.9');
+
+  await step('mise à jour : installation — la fausse appli est remplacée (9.9.9)',
+    `window.pohDesktop.update.install().then(r => { window.__updateBackupDir = r.backupDir || ''; return 'ok=' + r.ok + ' echange=' + r.swapped + ' version=' + r.version; })`,
+    (v) => v === 'ok=true echange=true version=9.9.9');
+
+  await stepMain('mise à jour (principal) : version de la fausse appli = 9.9.9',
+    () => {
+      const appDir = process.env.POH_UPDATE_TEST_APP;
+      return fs.readFileSync(path.join(appDir, 'Contents', 'Resources', 'version.txt'), 'utf8').trim();
+    },
+    (v) => v === '9.9.9');
+
+  await stepMain('mise à jour (principal) : sauvegarde de l’ancienne 1.2.4 conservée', async () => {
+    // Le dossier exact rendu par l'installation (pas un balayage de
+    // /tmp : un reste d'un ancien test ne doit pas valider ce contrôle).
+    const backupDir = await win.webContents.executeJavaScript(`window.__updateBackupDir || ''`);
+    if (!backupDir) return 'aucune sauvegarde retournée';
+    return fs.readFileSync(path.join(backupDir, 'Contents', 'Resources', 'version.txt'), 'utf8').trim();
+  },
+  (v) => v === '1.2.4');
+
+  await step('mise à jour : désactiver puis réactiver le réglage persiste',
+    `window.pohDesktop.update.setSettings({ autoUpdate: false }).then(() => window.pohDesktop.update.getSettings().then(b => 'apres-off=' + b.autoUpdate)).then((s1) => window.pohDesktop.update.setSettings({ autoUpdate: true }).then(() => window.pohDesktop.update.getSettings().then(b => s1 + ' apres-on=' + b.autoUpdate)))`,
+    (v) => v === 'apres-off=false apres-on=true');
+
+  await step('mise à jour : ouverture de la fenêtre Réglages',
+    `window.pohDesktop.ai.openSettings().then(r => 'ouvert=' + r.opened)`,
+    (v) => v === 'ouvert=true');
+
+  await stepMain('mise à jour (Réglages) : case cochée + bouton « Vérifier maintenant » présent', async () => {
+    const other = BrowserWindow.getAllWindows().find((w) => w !== win);
+    if (!other) return 'aucune fenêtre Réglages';
+    const t0 = Date.now();
+    while (Date.now() - t0 < 8000) {
+      try {
+        const s = await other.webContents.executeJavaScript(`window.__pohAiSettings ? JSON.stringify(window.__pohAiSettings.state()) : 'pas-pret'`);
+        if (s !== 'pas-pret') {
+          const o = JSON.parse(s);
+          if (o.updateAutoChecked === true && o.updateCheckNowPresent === true) {
+            other.close();
+            return 'case=cochée bouton=présent';
+          }
+        }
+      } catch { /* fenêtre en cours de chargement */ }
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    return 'délai dépassé';
+  }, (v) => v === 'case=cochée bouton=présent');
 
   await shot('07-etat-vide');
   return out;

@@ -1099,6 +1099,137 @@ function layoutOverlapInfo() {
   return JSON.stringify(info);
 }
 
+// Mises à jour (v1.2.5) — bannière en haut de la page + état exposé
+// pour l'auto-test. Le processus principal envoie les événements
+// `update:status` (disponible / progression / prête / erreur) ; la
+// bannière ne fait qu'afficher, jamais décider : c'est le principal qui
+// vérifie le flux, télécharge et installe.
+const updateState = {
+  available: false, version: '', currentVersion: '',
+  downloading: false, progress: null, ready: false,
+  installedVersion: '', error: '',
+};
+function updateApi() {
+  return window.pohDesktop && window.pohDesktop.update ? window.pohDesktop.update : null;
+}
+function showUpdateBanner(text, actionLabel, onAction) {
+  const banner = $('updateBanner');
+  const label = $('updateBannerText');
+  const action = $('updateBannerAction');
+  const later = $('updateBannerLater');
+  if (!banner || !label) return;
+  label.textContent = text;
+  if (actionLabel && onAction) {
+    action.hidden = false;
+    action.textContent = actionLabel;
+    action.onclick = (e) => { onAction(); e.currentTarget.blur(); };
+  } else {
+    action.hidden = true;
+    action.onclick = null;
+  }
+  if (later) {
+    later.hidden = false;
+    later.onclick = (e) => { banner.hidden = true; e.currentTarget.blur(); };
+  }
+  banner.hidden = false;
+}
+function hideUpdateBanner() {
+  const banner = $('updateBanner');
+  if (banner) banner.hidden = true;
+}
+async function startUpdateDownload() {
+  const api = updateApi();
+  if (!api) return;
+  try {
+    await api.download();
+    updateState.downloading = true;
+    updateState.error = '';
+    showUpdateBanner(`Téléchargement de la mise à jour ${updateState.version}…`);
+  } catch (e) {
+    updateState.downloading = false;
+    updateState.error = (e && e.message) || 'Le téléchargement a échoué.';
+    showUpdateBanner(updateState.error);
+  }
+}
+async function installUpdate() {
+  const api = updateApi();
+  if (!api) return;
+  try {
+    const res = await api.install();
+    if (res && res.swapped) {
+      // Auto-test uniquement : le remplacement a eu lieu sans relance —
+      // on affiche le résultat au lieu de redémarrer.
+      updateState.ready = false;
+      updateState.installedVersion = res.version || '';
+      showUpdateBanner(`Mise à jour installée : version ${updateState.installedVersion}.`);
+      return;
+    }
+    // Sinon l'application redémarre pour installer (Windows : installer
+    // au redémarrage ; macOS : relance après remplacement du .app).
+  } catch (e) {
+    updateState.error = (e && e.message) || 'L’installation a échoué.';
+    showUpdateBanner(updateState.error);
+  }
+}
+function handleUpdateStatus(payload) {
+  if (!payload || typeof payload.type !== 'string') return;
+  if (payload.type === 'available') {
+    updateState.available = true;
+    updateState.version = payload.version || '';
+    updateState.currentVersion = payload.currentVersion || '';
+    updateState.ready = false;
+    updateState.error = '';
+    showUpdateBanner(
+      `Une mise à jour est disponible : version ${updateState.version}.`,
+      'Mettre à jour',
+      () => startUpdateDownload(),
+    );
+  } else if (payload.type === 'up-to-date') {
+    updateState.available = false;
+    updateState.version = '';
+    updateState.error = '';
+  } else if (payload.type === 'progress') {
+    updateState.downloading = true;
+    updateState.progress = (typeof payload.percent === 'number') ? payload.percent : null;
+    showUpdateBanner(`Téléchargement de la mise à jour ${updateState.version}…${updateState.progress !== null ? ` ${updateState.progress} %` : ''}`);
+  } else if (payload.type === 'ready') {
+    updateState.downloading = false;
+    updateState.ready = true;
+    updateState.error = '';
+    showUpdateBanner(
+      `Mise à jour ${payload.version || updateState.version} téléchargée.`,
+      'Redémarrer pour installer',
+      () => installUpdate(),
+    );
+  } else if (payload.type === 'error') {
+    updateState.error = payload.message || 'Impossible de vérifier les mises à jour.';
+    showUpdateBanner(updateState.error);
+  }
+}
+{
+  const api = updateApi();
+  if (api && typeof api.onStatus === 'function') api.onStatus(handleUpdateStatus);
+}
+
+// API pour l'auto-test (main.js, POH_SELFTEST=1) — état réel de la
+// bannière de mise à jour.
+window.__pohUpdate = {
+  state: () => ({ ...updateState }),
+  bannerText: () => {
+    const el = $('updateBannerText');
+    const banner = $('updateBanner');
+    return banner && !banner.hidden ? (el ? el.textContent : '') : '';
+  },
+  checkNow: () => {
+    const api = updateApi();
+    if (!api) return Promise.reject(new Error('La fonction de mise à jour n’est pas branchée dans cette application.'));
+    return api.checkNow();
+  },
+  download: () => startUpdateDownload(),
+  install: () => installUpdate(),
+  hideBanner: () => hideUpdateBanner(),
+};
+
 // API utilisée par l'auto-test (main.js, POH_SELFTEST=1) — état réel de l'appli.
 window.__poh = {
   ready: () => state.ready,
