@@ -48,14 +48,16 @@ check('aucun jeton dans update-feed.js (github_pat_)', !/github_pat_[A-Za-z0-9_]
 check('aucun GH_TOKEN lu dans update-feed.js', !feedSrc.includes('GH_TOKEN'), true);
 
 // 2. Analyse de latest.yml (format electron-builder, version entre
-// guillemets ou non, un fichier Windows).
+// guillemets ou non, un fichier Windows). Noms attendus : ceux produits
+// par artifactName (${name}-${version}-${arch}.${ext}) — sans espace,
+// identiques dans le yml et dans la Release (défaut bloquant v1.2.5).
 const ymlWin = [
   'version: 1.2.5',
   'files:',
-  '  - url: Bibliotheque.Aviation.Setup.1.2.5.exe',
+  '  - url: bibliotheque-aviation-1.2.5-x64.exe',
   '    sha512: QUJDREVGR0g=',
   '    size: 149763921',
-  'path: Bibliotheque.Aviation.Setup.1.2.5.exe',
+  'path: bibliotheque-aviation-1.2.5-x64.exe',
   'sha512: QUJDREVGR0g=',
   "releaseDate: '2026-11-17T21:10:13.000Z'",
   '',
@@ -63,7 +65,7 @@ const ymlWin = [
 const parsedWin = parseLatestYml(ymlWin);
 check('latest.yml : version', parsedWin.version, '1.2.5');
 check('latest.yml : 1 fichier', parsedWin.files.length, 1);
-check('latest.yml : url', parsedWin.files[0].url, 'Bibliotheque.Aviation.Setup.1.2.5.exe');
+check('latest.yml : url', parsedWin.files[0].url, 'bibliotheque-aviation-1.2.5-x64.exe');
 check('latest.yml : sha512', parsedWin.files[0].sha512, 'QUJDREVGR0g=');
 check('latest.yml : taille', parsedWin.files[0].size, 149763921);
 
@@ -71,13 +73,13 @@ check('latest.yml : taille', parsedWin.files[0].size, 149763921);
 const ymlMac = [
   'version: 1.2.5',
   'files:',
-  '  - url: Bibliotheque.Aviation-1.2.5-arm64.zip',
+  '  - url: bibliotheque-aviation-1.2.5-arm64.zip',
   '    sha512: YXJtNjQ=',
   '    size: 158249664',
-  '  - url: Bibliotheque.Aviation-1.2.5.zip',
+  '  - url: bibliotheque-aviation-1.2.5-x64.zip',
   '    sha512: eDY0',
   '    size: 165468574',
-  'path: Bibliotheque.Aviation-1.2.5-arm64.zip',
+  'path: bibliotheque-aviation-1.2.5-arm64.zip',
   'sha512: YXJtNjQ=',
   "releaseDate: '2026-11-17T21:10:13.000Z'",
   '',
@@ -85,9 +87,9 @@ const ymlMac = [
 const parsedMac = parseLatestYml(ymlMac);
 check('latest-mac.yml : version', parsedMac.version, '1.2.5');
 check('latest-mac.yml : 2 fichiers', parsedMac.files.length, 2);
-check('latest-mac.yml : choix arm64', pickUpdateFile(parsedMac.files, 'darwin', 'arm64').url, 'Bibliotheque.Aviation-1.2.5-arm64.zip');
-check('latest-mac.yml : choix x64', pickUpdateFile(parsedMac.files, 'darwin', 'x64').url, 'Bibliotheque.Aviation-1.2.5.zip');
-check('latest.yml : choix exe', pickUpdateFile(parsedWin.files, 'win32', 'x64').url, 'Bibliotheque.Aviation.Setup.1.2.5.exe');
+check('latest-mac.yml : choix arm64', pickUpdateFile(parsedMac.files, 'darwin', 'arm64').url, 'bibliotheque-aviation-1.2.5-arm64.zip');
+check('latest-mac.yml : choix x64', pickUpdateFile(parsedMac.files, 'darwin', 'x64').url, 'bibliotheque-aviation-1.2.5-x64.zip');
+check('latest.yml : choix exe', pickUpdateFile(parsedWin.files, 'win32', 'x64').url, 'bibliotheque-aviation-1.2.5-x64.exe');
 check('latest.yml : pas de zip sur Windows', pickUpdateFile(parsedMac.files, 'win32', 'x64'), null);
 
 // 4. latest.yml incompréhensible -> UpdateError en français.

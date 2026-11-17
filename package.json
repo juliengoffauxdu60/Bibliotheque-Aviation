@@ -2,6 +2,7 @@
   "author": "Jarvis pour Julien Goffaux",
   "build": {
     "appId": "ca.airrichelieu.bibliotheque-aviation",
+    "artifactName": "${name}-${version}-${arch}.${ext}",
     "asarUnpack": [
       "node_modules/tesseract.js/**/*",
       "node_modules/tesseract.js-core/**/*"

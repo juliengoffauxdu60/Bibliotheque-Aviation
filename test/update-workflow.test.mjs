@@ -59,6 +59,13 @@ check('workflow macOS : DMG toujours envoyés', workflow.includes('dist/*.dmg'),
 check('mac : cible zip présente', Array.isArray(pkg.build.mac.target) && pkg.build.mac.target.includes('zip'), true);
 check('mac : cible dmg toujours présente', Array.isArray(pkg.build.mac.target) && pkg.build.mac.target.includes('dmg'), true);
 check('mac : signature ad-hoc conservée', pkg.build.mac.identity, '-');
+// 4b. Noms des installateurs (défaut bloquant de la première tentative
+// v1.2.5, 17 nov. 2026) : sans artifactName, electron-builder écrit
+// dans latest.yml un nom « sûr » en tirets alors que `gh release
+// upload` publie l'asset avec des points — l'updater ferait 404.
+// artifactName sans espace = nom sur disque = nom du yml = nom publié.
+check('artifactName : noms sans espace', pkg.build.artifactName, '${name}-${version}-${arch}.${ext}');
+check('artifactName : aucun espace littéral', !/\s/.test(pkg.build.artifactName || ''), true);
 check('build.files : main-update.js livré', pkg.build.files.includes('main-update.js'), true);
 check('build.files : main/**/* livré', pkg.build.files.includes('main/**/*'), true);
 check('flux : provider github, dépôt unique', pkg.build.publish.provider === 'github' && pkg.build.publish.owner === 'juliengoffauxdu60' && pkg.build.publish.repo === 'Bibliotheque-Aviation', true);
