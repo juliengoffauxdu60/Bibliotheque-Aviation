@@ -1,24 +1,46 @@
 # Build — Bibliothèque Aviation (Electron)
 #
-# Dépôt : juliengoffauxdu60/Bibliotheque-Aviation (privé). Trois jobs en série :
-# Windows construit, macOS construit, puis UN SEUL job publie la Release.
+# Dépôt : juliengoffauxdu60/Bibliotheque-Aviation (privé). Quatre jobs en
+# série : création de la Release en brouillon, Windows construit et envoie
+# son installateur, macOS construit et envoie ses DMG, puis UN SEUL job
+# publie la Release. ZÉRO artefact Actions — voir ci-dessous.
 #
-# POURQUOI ELECTRON-BUILDER NE PUBLIE JAMAIS (leçon des v1.0.0 / v1.1.0,
-# 14 nov. 2026) : son publieur GitHub crée la Release en parallèle dans
-# chaque tâche et se marche dessus — v1.0.0 a eu DEUX Releases (actifs
-# partagés, un blockmap dans la mauvaise), v1.1.0 aussi (le DMG arm64 a
-# écrasé le DMG x64 sous le même nom, le DMG x64 a disparu), et un job
-# macOS a échoué en 422 « Release already_exists ». Même le `needs`
-# n'a pas suffi : les tâches d'un même job publient en parallèle. Donc
-# --publish never partout, et c'est le job `release` qui crée la Release
-# UNE fois, avec `gh release create`, à partir des artefacts des deux
-# builds. Le job `release` fait un checkout : `gh` a besoin d'un dépôt
-# git local pour déterminer le dépôt (sans lui, « fatal: not a git
-# repository », vécu le 14 nov.). Les runs sur main ne font que construire
-# (le job `release` ne tourne que sur un tag v*).
+# POURQUOI PLUS AUCUN ARTEFACT (v1.2.4, 17 nov. 2026) : le quota gratuit
+# des artefacts Actions est de 500 Mo. Chaque run téléverse ~450-545 Mo
+# (Windows ~150 Mo + macOS ~310-370 Mo), et chaque version déclenche
+# DEUX runs (push + tag), soit ~900 Mo : le quota est dépassé à chaque
+# version. Le 16 nov., 52 artefacts (13 206 Mo) ont été supprimés, mais
+# le compteur d'usage GitHub n'a TOUJOURS pas recalculé ~32 h après
+# (0 artefact, 0 octet vérifiés par API) : chaque run échoue depuis à
+# l'étape d'upload d'artefact (« Artifact storage quota has been hit »),
+# alors que les tests et la construction des installateurs réussissent.
+# Les installateurs ne transitent donc plus par les artefacts : chaque
+# job de build les envoie DIRECTEMENT dans la Release avec
+# `gh release upload`. Le quota des artefacts ne peut plus rien bloquer.
 #
-# POURQUOI LA SIGNATURE AD-HOC (même jour) : sans signature, macOS sur
-# Apple Silicon dit que l'appli « est endommagée » et n'offre AUCUN
+# POURQUOI CET ORDRE (leçon des v1.0.0 / v1.1.0, 14 nov. 2026) :
+# electron-builder NE PUBLIE JAMAIS — son publieur GitHub crée la
+# Release en parallèle dans chaque tâche et se marche dessus (v1.0.0 a
+# eu DEUX Releases, v1.1.0 a perdu son DMG x64 écrasé par l'arm64, un
+# job a échoué en 422 « Release already_exists »). Donc --publish never
+# partout, et c'est ce workflow qui crée la Release UNE fois, en
+# brouillon, AVANT les builds (`create-release`), puis chaque build
+# envoie ses fichiers dedans (`gh release upload --clobber`), puis UN
+# SEUL job la publie (`gh release edit --draft=false`). Les jobs de
+# build dépendent du job de création (`needs`) pour que la Release
+# existe avant tout envoi ; `build-macos` dépend de `build-windows`
+# comme avant. Chaque job `gh` fait un checkout en première étape :
+# `gh` a besoin d'un dépôt git local pour déterminer le dépôt (sans
+# lui, « fatal: not a git repository », vécu le 14 nov.).
+#
+# REPRISES SANS RISQUE : si un run est relancé (« Re-run failed
+# jobs »), la création retrouve la Release existante (`gh release view`,
+# pas de 422) et les envois écrasent les fichiers déjà présents
+# (`--clobber`). Les runs sur main sans tag ne font que construire et
+# tester : les étapes Release sont ignorées (`if: startsWith(...)`).
+#
+# POURQUOI LA SIGNATURE AD-HOC (14 nov. 2026) : sans signature, macOS
+# sur Apple Silicon dit que l'appli « est endommagée » et n'offre AUCUN
 # bouton dans les Réglages — il faut Terminal, inacceptable pour les
 # gens de la classe. `identity: "-"` signe ad-hoc (gratuit, sans compte
 # Apple Developer) et `hardenedRuntime: false` évite le rejet des
@@ -28,8 +50,7 @@
 # La signature parfaite (Developer ID + notarisation, zéro message)
 # demanderait un compte Apple Developer payant — pas en place.
 #
-# Chaque push sur main produit les installateurs en artefacts. Chaque tag
-# v* publie en plus une Release GitHub avec l'exe et les DMG en
+# Chaque tag v* publie une Release GitHub avec l'exe et les DMG en
 # téléchargement direct. Pas de DMG universel : le fusionneur
 # d'electron-builder refuse le module natif canvas
 # (@napi-rs/canvas-darwin-arm64), identique dans les deux builds et non
@@ -47,8 +68,28 @@ on:
   workflow_dispatch:
 
 jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Créer la Release en brouillon
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
+            echo "La release ${{ github.ref_name }} existe déjà, on la réutilise."
+          else
+            gh release create "${{ github.ref_name }}" --draft \
+              --title "${{ github.ref_name }}" \
+              --notes "Bibliothèque Aviation — recherche plein texte dans les documents d'aviation (POH, AIM, RAC)."
+          fi
+
   build-windows:
     runs-on: windows-latest
+    needs: create-release
     steps:
       - name: Récupérer le code
         uses: actions/checkout@v4
@@ -68,19 +109,11 @@ jobs:
       - name: Construire l'installateur Windows
         run: npm run dist
 
-      - name: Publier l'installateur (.exe + .blockmap)
-        uses: actions/upload-artifact@v4
-        with:
-          name: bibliotheque-aviation-windows
-          # v1.2.2 : 1 jour suffit — le job `release` consomme les artefacts
-          # dans les minutes qui suivent. Sans cela, chaque run téléverse
-          # ~450 Mo conservés 90 jours (quota gratuit : 500 Mo — atteint le
-          # 16 nov. 2026 avec 52 artefacts / 13 206 Mo).
-          retention-days: 1
-          path: |
-            dist/*.exe
-            dist/*.blockmap
-          if-no-files-found: error
+      - name: Envoyer l'installateur vers la Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" dist/*.exe dist/*.blockmap --clobber
 
   build-macos:
     runs-on: macos-latest
@@ -104,19 +137,13 @@ jobs:
       - name: Construire les DMG macOS
         run: npm run dist:mac
 
-      - name: Publier les DMG (.dmg + .blockmap)
-        uses: actions/upload-artifact@v4
-        with:
-          name: bibliotheque-aviation-macos
-          # v1.2.2 : voir le job Windows — 1 jour suffit, le job `release`
-          # consomme les artefacts dans les minutes qui suivent.
-          retention-days: 1
-          path: |
-            dist/*.dmg
-            dist/*.blockmap
-          if-no-files-found: error
+      - name: Envoyer les DMG vers la Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" dist/*.dmg dist/*.blockmap --clobber
 
-  release:
+  publish-release:
     runs-on: ubuntu-latest
     needs: [build-windows, build-macos]
     if: startsWith(github.ref, 'refs/tags/')
@@ -124,24 +151,7 @@ jobs:
       - name: Récupérer le code
         uses: actions/checkout@v4
 
-      - name: Récupérer les installateurs Windows
-        uses: actions/download-artifact@v4
-        with:
-          name: bibliotheque-aviation-windows
-          path: dist-win
-
-      - name: Récupérer les DMG macOS
-        uses: actions/download-artifact@v4
-        with:
-          name: bibliotheque-aviation-macos
-          path: dist-mac
-
-      - name: Créer la Release avec tous les installateurs
+      - name: Publier la Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release create "${{ github.ref_name }}" \
-            --title "${{ github.ref_name }}" \
-            --notes "Bibliothèque Aviation — recherche plein texte dans les documents d'aviation (POH, AIM, RAC)." \
-            dist-win/*.exe dist-win/*.blockmap \
-            dist-mac/*.dmg dist-mac/*.blockmap
+        run: gh release edit "${{ github.ref_name }}" --draft=false

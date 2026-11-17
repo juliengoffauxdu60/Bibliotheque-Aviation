@@ -60,7 +60,7 @@ check("MIME '.wasm' dans main.js", mainJs.includes("'.wasm': 'application/wasm'"
 // 4. Le paquet embarque assets/pdfjs/** (donc wasm/ aussi).
 const pkg = JSON.parse(fs.readFileSync(path.join(base, 'package.json'), 'utf8'));
 check('build.files couvre assets/pdfjs/**', pkg.build.files.includes('assets/pdfjs/**'), true);
-check('version 1.2.3', pkg.version, '1.2.3');
+check('version 1.2.4', pkg.version, '1.2.4');
 
 // 5. Garde anti-pages-vides dans la lecture du texte (import.js) : elle
 // doit exister — c'est elle qui aurait arrêté la boucle à la page 5 au
@@ -71,10 +71,19 @@ check('lecture auto après import (startOcr appelé)', importJs.includes('if (!w
 check('reprise sur la carte (Rendre cherchable)', importJs.includes("textContent = 'Rendre cherchable'"), true);
 check('reprise au démarrage (needsTextReading)', importJs.includes('state.imported.find(needsTextReading)'), true);
 
-// 6. Rétention des artefacts GitHub : 1 jour sur les deux uploads
-// (quota gratuit 500 Mo atteint le 16 nov. 2026 : 52 artefacts, 13 206 Mo).
+// 6. Zéro artefact GitHub Actions (v1.2.4, 17 nov. 2026) : le quota
+// gratuit (500 Mo) est dépassé à chaque version (~450-545 Mo par run,
+// deux runs par version) et le compteur GitHub n'a pas recalculé la
+// suppression des 52 artefacts du 16 nov. (~32 h après, 0 octet vérifié
+// par API) — chaque run échouait à l'upload d'artefact. Les
+// installateurs vont donc DIRECTEMENT dans la Release (`gh release
+// upload`), sans passer par les artefacts. Ce contrôle verrouille
+// l'invariant : aucun upload/download-artifact ne doit revenir.
 const workflow = fs.readFileSync(path.join(base, '.github', 'workflows', 'build.yml'), 'utf8');
-check('retention-days: 1 (deux occurrences)', (workflow.match(/retention-days: 1/g) || []).length, 2);
+check('aucun upload-artifact', !workflow.includes('upload-artifact'), true);
+check('aucun download-artifact', !workflow.includes('download-artifact'), true);
+check('envoi direct vers la Release (2 occurrences)', (workflow.match(/run: gh release upload/g) || []).length, 2);
+check('Release créée en brouillon avant les builds', workflow.includes('gh release create'), true);
 
 // 7. Fixture CCITT (test/fixtures/ccitt-1p.pdf) : 1 page, image CCITT G4,
 // détecté scanné (aucun texte extractible).
