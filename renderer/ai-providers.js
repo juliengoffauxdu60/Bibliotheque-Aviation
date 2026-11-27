@@ -235,21 +235,25 @@ export function mapNetworkError(err, endpoint, providerId) {
   return aiError('La demande n’a pas pu partir. Vérifiez votre connexion Internet et réessayez.');
 }
 
-// Délai du test de connexion (bouton « Tester » — voir main-ai.js).
-// 28 s : mesuré le 15 nov. 2026, Google met 24 s à répondre (même pour
+// Délai du test de connexion en appel IPC direct (`ai:test`, voir
+// main-ai.js) — compatibilité (tests Node, harnais E2E) : 28 s,
+// mesuré le 15 nov. 2026, Google met 24 s à répondre (même pour
 // refuser une mauvaise clé, code 400) — l'ancien délai de 20 s faisait
 // échouer le test alors que tout était bien configuré. 28 s reste SOUS
 // la limite de 30 s d'Electron pour un appel IPC (au-delà, l'appel est
-// rejeté avec « reply was never sent » — prouvé par reproduction) ; le
-// bouton Tester réessaie une fois en cas de dépassement de délai (voir
-// isTestTimeout ci-dessous), jamais plus.
+// rejeté avec « reply was never sent » — prouvé par reproduction).
+// Le bouton « Tester » de la page Réglages n'utilise PLUS cet appel :
+// depuis la v1.2.6, il lance un test en tâche de fond (`ai:test-start`,
+// budget 120 s, progression par événements — voir main-ai.js), qui ne
+// connaît pas la limite IPC.
 export const TEST_TIMEOUT_MS = 28000;
 
-// Le test de connexion réessaie-t-il une fois sur cette valeur ?
+// Le test de connexion a-t-il échoué par dépassement de délai ?
 // `value` est soit la réponse { ok, error, code } du processus principal,
-// soit l'erreur levée par l'appel IPC. Seul un dépassement de délai donne
-// droit à un nouvel essai : une clé refusée ou un modèle inconnu ne
-// s'arrangera pas en réessayant.
+// soit l'erreur levée par l'appel IPC. Conservé pour compatibilité
+// (l'ancien bouton Tester réessayait une fois sur ce cas seulement) ;
+// le mécanisme de fond (v1.2.6) n'a plus besoin de réessayer, il
+// attend le résultat avec les durées mesurées.
 export function isTestTimeout(value) {
   if (!value) return false;
   if (value.ok === false && value.code === 'timeout') return true;
@@ -264,10 +268,11 @@ export function isTestTimeout(value) {
 // modèle est surchargé ; sans nouvelle tentative, un 503 passager
 // ressemble à une panne). `opts.sleepImpl` est injectable pour les tests.
 // `opts.timeoutMs` : durée maximale de l'appel (par défaut 120 s). Le
-// test de connexion utilise TEST_TIMEOUT_MS (28 s) : un test ne doit
-// jamais laisser « Test en cours… » figé des minutes — et il doit rester
-// SOUS la limite de 30 s d'Electron pour un appel IPC (au-delà, l'appel
-// est rejeté avec « reply was never sent » — prouvé par reproduction).
+// test de connexion en tâche de fond utilise 120 s (voir main-ai.js) :
+// un test ne doit jamais laisser « Test en cours… » figé, et les
+// durées mesurées disent où le temps est passé. L'appel IPC direct
+// `ai:test` (compatibilité) garde TEST_TIMEOUT_MS (28 s, sous la
+// limite de 30 s d'Electron).
 // Lève une Error avec .userMessage en français clair en cas d'échec.
 export async function callProvider(settings, prompt, fetchImpl = globalThis.fetch, opts = {}) {
   const providerId = settings.provider;

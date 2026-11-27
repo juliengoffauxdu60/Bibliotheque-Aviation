@@ -50,7 +50,7 @@
     "electron": "^45.3.2",
     "electron-builder": "^26.18.0"
   },
-  "license": "UNLICENSED",
+  "license": "GPL-3.0",
   "main": "main.js",
   "name": "bibliotheque-aviation",
   "private": true,
@@ -66,6 +66,6 @@
     "start": "electron .",
     "test": "node test/run-all.mjs"
   },
-  "version": "1.2.5",
+  "version": "1.2.6",
   "type": "module"
 }

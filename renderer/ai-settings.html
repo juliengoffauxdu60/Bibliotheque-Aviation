@@ -40,6 +40,7 @@
 
   <section class="update-settings" aria-label="Mises à jour">
     <h2>Mises à jour</h2>
+    <p class="ai-note">Version installée : <span id="installedVersionLabel">…</span></p>
     <label class="update-auto-label" for="updateAutoCheck">
       <input type="checkbox" id="updateAutoCheck" checked>
       Vérifier automatiquement les mises à jour au démarrage
@@ -49,6 +50,7 @@
       <button type="button" id="updateCheckNowBtn">Vérifier maintenant</button>
     </div>
     <p id="updateSettingsStatus" class="ai-status" aria-live="polite"></p>
+    <p id="updateDetail" class="ai-note" hidden></p>
   </section>
 
   <p class="ai-note">Un seul fournisseur est actif à la fois. La recherche et le lecteur PDF fonctionnent toujours sans IA, même sans Internet.</p>

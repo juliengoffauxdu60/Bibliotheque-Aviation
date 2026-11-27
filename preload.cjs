@@ -5,7 +5,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('pohDesktop', {
-  version: '1.0.0',
   platform: process.platform,
   import: {
     list: () => ipcRenderer.invoke('poh-import:list'),
@@ -22,6 +21,13 @@ contextBridge.exposeInMainWorld('pohDesktop', {
     clearKey: () => ipcRenderer.invoke('ai:clear-key'),
     ask: (payload) => ipcRenderer.invoke('ai:ask', payload),
     test: () => ipcRenderer.invoke('ai:test'),
+    // Test de connexion en tâche de fond (v1.2.6) : ai:test-start rend
+    // un testId tout de suite, la progression et le résultat arrivent
+    // par événements — plus de coupure à 30 s, et chaque étape est
+    // datée (voir main-ai.js). ai:test reste pour compatibilité.
+    testStart: () => ipcRenderer.invoke('ai:test-start'),
+    onTestProgress: (cb) => ipcRenderer.on('ai:test-progress', (_event, payload) => cb(payload)),
+    onTestDone: (cb) => ipcRenderer.on('ai:test-done', (_event, payload) => cb(payload)),
     openSettings: () => ipcRenderer.invoke('ai:open-settings'),
   },
   // Mise à jour automatique (v1.2.5) : réglage, vérification,
@@ -29,6 +35,9 @@ contextBridge.exposeInMainWorld('pohDesktop', {
   // arrivent par onStatus — le téléchargement est trop long pour une
   // réponse IPC (limite 30 s).
   update: {
+    // v1.2.6 : la vraie version installée, lue dans le processus
+    // principal — le rendu n'a plus aucune version en dur.
+    getVersion: () => ipcRenderer.invoke('update:get-version'),
     getSettings: () => ipcRenderer.invoke('update:get-settings'),
     setSettings: (patch) => ipcRenderer.invoke('update:set-settings', patch),
     checkNow: () => ipcRenderer.invoke('update:check-now'),

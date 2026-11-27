@@ -32,6 +32,7 @@ import { execFile } from 'node:child_process';
 import { app, ipcMain } from 'electron';
 import {
   UpdateError, checkForUpdate, downloadFile, isNewer, verifySha512,
+  sanitizeErrorDetail,
 } from './main/update-feed.js';
 import { bundleDirFromExe, installMacUpdate } from './main/mac-update.js';
 
@@ -141,7 +142,12 @@ async function checkWindows() {
     result = await withTimeout(autoUpdater.checkForUpdates(), 'La vérification des mises à jour a mis trop de temps (délai dépassé).');
   } catch (e) {
     if (e instanceof UpdateError) throw e;
-    throw new UpdateError('Impossible de vérifier les mises à jour (le serveur des versions est injoignable ou la configuration est absente). Réessayez plus tard.');
+    // v1.2.6 : l'erreur réelle n'est plus avalée — sa cause assainie
+    // (code / message, tronquée, secrets masqués) voyage dans `detail`
+    // jusqu'à la section Mises à jour des Réglages ; le message
+    // convivial, lui, ne change pas.
+    const detail = sanitizeErrorDetail(e);
+    throw new UpdateError('Impossible de vérifier les mises à jour (le serveur des versions est injoignable ou la configuration est absente). Réessayez plus tard.', detail);
   }
   const info = result?.updateInfo;
   if (!info || !info.version) {
@@ -173,10 +179,21 @@ export async function checkForUpdateNow() {
   checkingPromise = (async () => {
     const platform = currentPlatform();
     let result;
-    if (platform === 'win32') {
-      result = await checkWindows();
-    } else {
-      result = await checkFeed();
+    try {
+      if (platform === 'win32') {
+        result = await checkWindows();
+      } else {
+        result = await checkFeed();
+      }
+    } catch (e) {
+      // v1.2.6 : la cause réelle est journalisée (assainie) et transmise
+      // aux fenêtres via l'événement d'erreur — la bannière garde le
+      // message convivial, la section Réglages affiche le détail.
+      const detail = e instanceof UpdateError ? e.detail : sanitizeErrorDetail(e);
+      const message = e instanceof UpdateError ? e.userMessage : 'Impossible de vérifier les mises à jour.';
+      console.error(`[mise à jour] échec de vérification (${platform}) : ${message}${detail ? ` — détail : ${detail}` : ''}`);
+      sendStatus({ type: 'error', message, detail: detail || undefined });
+      throw e;
     }
     pendingUpdate = result.available
       ? { version: result.version, file: result.file, updateInfo: result.updateInfo || null, platform }
@@ -306,13 +323,21 @@ export function scheduleAutoChecks() {
 
 export function initUpdate(win) {
   mainWindow = win;
+  // v1.2.6 : la vraie version installée (package.json), jamais une
+  // valeur en dur côté rendu — c'est elle qui s'affiche dans l'en-tête
+  // et dans les Réglages.
+  ipcMain.handle('update:get-version', () => app.getVersion());
   ipcMain.handle('update:get-settings', () => getUpdateSettings());
   ipcMain.handle('update:set-settings', (_e, patch) => saveUpdateSettings(patch || {}));
   ipcMain.handle('update:check-now', async () => {
     try {
       return await checkForUpdateNow();
     } catch (e) {
-      if (e instanceof UpdateError) throw new Error(e.userMessage);
+      // Le message convivial reste ; le détail assaini s'ajoute sur la
+      // même ligne pour la section Mises à jour des Réglages.
+      if (e instanceof UpdateError) {
+        throw new Error(e.detail ? `${e.userMessage} — Détail : ${e.detail}` : e.userMessage);
+      }
       throw new Error('Impossible de vérifier les mises à jour. Réessayez plus tard.');
     }
   });

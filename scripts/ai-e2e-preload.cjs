@@ -4,7 +4,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('pohDesktop', {
-  version: '1.0.0',
   platform: process.platform,
   ai: {
     getSettings: () => ipcRenderer.invoke('ai:get-settings'),
@@ -12,6 +11,9 @@ contextBridge.exposeInMainWorld('pohDesktop', {
     clearKey: () => ipcRenderer.invoke('ai:clear-key'),
     ask: (payload) => ipcRenderer.invoke('ai:ask', payload),
     test: () => ipcRenderer.invoke('ai:test'),
+    testStart: () => ipcRenderer.invoke('ai:test-start'),
+    onTestProgress: (cb) => ipcRenderer.on('ai:test-progress', (_event, payload) => cb(payload)),
+    onTestDone: (cb) => ipcRenderer.on('ai:test-done', (_event, payload) => cb(payload)),
     openSettings: () => ipcRenderer.invoke('ai:open-settings'),
   },
 });

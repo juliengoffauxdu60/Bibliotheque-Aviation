@@ -25,12 +25,41 @@ export const UPDATE_FEED = {
 };
 
 // Erreur présentable : message français, jamais de détail technique brut.
+// `detail` (v1.2.6) : cause technique sous-jacente, déjà assainie par
+// sanitizeErrorDetail — affichée UNIQUEMENT dans la section Mises à jour
+// des Réglages, jamais dans la bannière, jamais journalisée brute.
 export class UpdateError extends Error {
-  constructor(message) {
+  constructor(message, detail = '') {
     super(message);
     this.name = 'UpdateError';
     this.userMessage = message;
+    this.detail = typeof detail === 'string' ? detail : '';
   }
+}
+
+// Détail technique d'une erreur sous-jacente, assaini pour l'affichage :
+// on ne garde que le code et/ou le message, tronqué, avec les secrets
+// éventuels masqués (jeton, clé API, en-tête d'autorisation). Ne laisse
+// JAMAIS passer un secret : en cas de doute, le motif est remplacé.
+export function sanitizeErrorDetail(err) {
+  if (!err) return '';
+  const parts = [];
+  if (typeof err.code === 'string' && err.code) parts.push(err.code);
+  if (err instanceof UpdateError) {
+    if (err.detail) parts.push(err.detail);
+  } else if (typeof err.message === 'string' && err.message) {
+    parts.push(err.message);
+  }
+  let detail = parts.join(' — ').trim();
+  detail = detail
+    .replace(/ghp_[A-Za-z0-9]+/g, '[masqué]')
+    .replace(/github_pat_[A-Za-z0-9_]+/g, '[masqué]')
+    .replace(/gho_[A-Za-z0-9]+/g, '[masqué]')
+    .replace(/sk-[A-Za-z0-9_-]+/g, '[masqué]')
+    .replace(/Bearer\s+\S+/gi, 'Bearer [masqué]')
+    .replace(/xox[baprs]-[A-Za-z0-9-]+/g, '[masqué]');
+  if (detail.length > 200) detail = detail.slice(0, 200) + '…';
+  return detail;
 }
 
 // Base du flux. En production : les assets de la dernière Release.

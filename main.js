@@ -507,7 +507,7 @@ async function runSelfTest(win) {
 
   await step('mise à jour : vérification trouve la 9.9.9 (flux local)',
     `window.__pohUpdate.checkNow().then(r => 'dispo=' + r.available + ' version=' + r.version + ' actuelle=' + r.currentVersion)`,
-    (v) => v === 'dispo=true version=9.9.9 actuelle=1.2.5');
+    (v) => v === 'dispo=true version=9.9.9 actuelle=1.2.6');
 
   await step('mise à jour : bannière visible avec la version 9.9.9',
     `window.__pohUpdate.bannerText()`,

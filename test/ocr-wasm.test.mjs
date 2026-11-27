@@ -60,7 +60,7 @@ check("MIME '.wasm' dans main.js", mainJs.includes("'.wasm': 'application/wasm'"
 // 4. Le paquet embarque assets/pdfjs/** (donc wasm/ aussi).
 const pkg = JSON.parse(fs.readFileSync(path.join(base, 'package.json'), 'utf8'));
 check('build.files couvre assets/pdfjs/**', pkg.build.files.includes('assets/pdfjs/**'), true);
-check('version 1.2.5', pkg.version, '1.2.5');
+check('version 1.2.6', pkg.version, '1.2.6');
 
 // 5. Garde anti-pages-vides dans la lecture du texte (import.js) : elle
 // doit exister — c'est elle qui aurait arrêté la boucle à la page 5 au

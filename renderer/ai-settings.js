@@ -1,5 +1,3 @@
-import { isTestTimeout } from 'app://renderer/ai-providers.js';
-
 // Page « Réglages IA » — logique.
 // Parle uniquement au processus principal via window.pohDesktop.ai (patch
 // préchargeur) : la clé en clair ne sort jamais de cette page vers le
@@ -10,25 +8,32 @@ const $ = (id) => document.getElementById(id);
 let providers = [];
 let current = null;
 let testing = false;
+let activeTestId = null;
+let testWatchdog = null;
 
-// Délais (le test réseau côté principal est borné à 28 s — voir
-// main-ai.js et TEST_TIMEOUT_MS dans ai-providers.js — donc 45 s côté
-// rendu laisse une marge sans jamais laisser « Test en cours… » figé si
-// le processus principal ne répond pas, par exemple quand l'invite du
-// trousseau macOS bloque le déchiffrement de la clé derrière la fenêtre ;
-// Electron lui-même rejette un appel IPC sans réponse au bout de 30 s —
-// « reply was never sent », prouvé par reproduction — et ce rejet est
-// traduit ci-dessous en message clair). En cas de dépassement de délai,
-// le test est réessayé UNE fois avant d'afficher l'erreur (voir le
-// gestionnaire du bouton Tester) : chaque essai reste un appel IPC
-// distinct, donc chacun reste sous la limite de 30 s.
-const TEST_TIMEOUT_MS = 45000;
+// Délais (v1.2.6) : le test de connexion ne passe PLUS par une réponse
+// IPC — Electron rejette un appel sans réponse au bout de ~30 s, et
+// l'ancien test (28 s + 2 essais) échouait par dépassement de délai
+// sans dire où ça bloquait. Maintenant le test tourne en tâche de fond
+// dans le processus principal (budget 120 s) : la progression arrive
+// par événements (étape + temps écoulé, affichés en direct) et le
+// résultat par un événement de fin (avec les durées mesurées : lecture
+// de la clé, appel réseau, total). Un minuteur de secours (130 s)
+// empêche que « Test en cours… » reste figé si l'événement de fin
+// n'arrive jamais. L'enregistrement et la lecture des réglages gardent
+// leurs propres délais, car ce sont des appels IPC courts.
+const TEST_WATCHDOG_MS = 130000;
 const SAVE_TIMEOUT_MS = 30000;
 const LOAD_TIMEOUT_MS = 15000;
 const API_ABSENT_MESSAGE = 'La fonction IA n’est pas branchée dans cette application (le préchargeur ne l’expose pas).';
 const TEST_TIMEOUT_MESSAGE = 'Le test n’a pas répondu à temps. Si une fenêtre du trousseau (macOS) est apparue derrière l’application, autorisez-la puis réessayez. Sinon, vérifiez votre connexion et réessayez.';
 const SAVE_TIMEOUT_MESSAGE = 'L’enregistrement n’a pas répondu à temps. Réessayez.';
 const CLEAR_TIMEOUT_MESSAGE = 'La suppression de la clé n’a pas répondu à temps. Réessayez.';
+const TEST_STEP_LABELS = {
+  preparation: 'Préparation…',
+  key: 'Lecture de la clé enregistrée…',
+  request: 'Appel au fournisseur…',
+};
 
 // Une promesse IPC qui ne répond jamais (processus principal bloqué,
 // canal absent) ne doit JAMAIS laisser la page muette : au bout du délai,
@@ -114,6 +119,27 @@ async function refreshUpdateSettings() {
   } catch {
     box.checked = true;
   }
+  // Version installée affichée dans la section (v1.2.6) : lue dans le
+  // processus principal, jamais écrite en dur.
+  const versionLabel = $('installedVersionLabel');
+  if (versionLabel && typeof api.getVersion === 'function') {
+    try {
+      const version = await api.getVersion();
+      if (typeof version === 'string' && version) versionLabel.textContent = version;
+    } catch { /* le libellé garde « … » */ }
+  }
+}
+
+function setUpdateDetail(text) {
+  const el = $('updateDetail');
+  if (!el) return;
+  if (text) {
+    el.textContent = `Détail : ${text}`;
+    el.hidden = false;
+  } else {
+    el.textContent = '';
+    el.hidden = true;
+  }
 }
 
 function bindUpdateSettings() {
@@ -147,12 +173,19 @@ function bindUpdateSettings() {
       if (btn) btn.disabled = true;
       try {
         setUpdateStatus('Vérification en cours…');
+        setUpdateDetail('');
         const res = await withTimeout(api.checkNow(), LOAD_TIMEOUT_MS, 'La vérification n’a pas répondu à temps. Réessayez.');
         setUpdateStatus(res && res.available
           ? `Une mise à jour est disponible : version ${res.version}. Fermez cette fenêtre pour la voir en haut de la page principale.`
           : 'L’application est à jour.');
       } catch (err) {
-        setUpdateStatus((err && err.message) || 'Impossible de vérifier les mises à jour.', true);
+        // Le processus principal joint le détail technique assaini au
+        // message convivial (« … — Détail : … ») : on l'affiche à part,
+        // sous le statut, pour ne pas noyer le message.
+        const message = (err && err.message) || 'Impossible de vérifier les mises à jour.';
+        const split = message.split(' — Détail : ');
+        setUpdateStatus(split[0] || message, true);
+        setUpdateDetail(split.length > 1 ? split.slice(1).join(' — Détail : ') : '');
       } finally {
         if (btn) btn.disabled = false;
         if (btn) btn.blur();
@@ -205,7 +238,90 @@ async function refresh() {
   }
 }
 
+function formatDurations(durations) {
+  if (!durations || typeof durations !== 'object') return '';
+  const parts = [];
+  if (typeof durations.keyMs === 'number') parts.push(`lecture de la clé : ${durations.keyMs} ms`);
+  if (typeof durations.networkMs === 'number') parts.push(`appel réseau : ${durations.networkMs} ms`);
+  if (typeof durations.totalMs === 'number') parts.push(`total : ${(durations.totalMs / 1000).toFixed(1)} s`);
+  return parts.length ? ` (${parts.join(', ')})` : '';
+}
+
+// Un seul test à la fois : la promesse en attente du résultat.
+let pendingTestResolve = null;
+
+function bindTestEvents(api) {
+  if (typeof api.onTestProgress !== 'function' || typeof api.onTestDone !== 'function') return;
+  api.onTestProgress((payload) => {
+    if (!payload || !payload.testId) return;
+    // Le premier événement peut arriver avant que testStart ait rendu
+    // le testId : on adopte le premier testId vu pendant un test.
+    if (activeTestId && payload.testId !== activeTestId) return;
+    if (!activeTestId) activeTestId = payload.testId;
+    const label = TEST_STEP_LABELS[payload.step] || 'Test en cours…';
+    const seconds = typeof payload.elapsedMs === 'number' ? (payload.elapsedMs / 1000).toFixed(1) : '0.0';
+    setStatus(`Test en cours… ${label} (${seconds} s)`);
+  });
+  api.onTestDone((payload) => {
+    if (!payload || !payload.testId) return;
+    if (activeTestId && payload.testId !== activeTestId) return;
+    activeTestId = null;
+    if (testWatchdog) { clearTimeout(testWatchdog); testWatchdog = null; }
+    const resolve = pendingTestResolve;
+    pendingTestResolve = null;
+    if (resolve) resolve(payload);
+  });
+}
+
+// Lance le test de fond et attend son événement de fin (ou le minuteur
+// de secours). Le statut affiche l'étape et le temps écoulé en direct
+// grâce aux événements de progression (voir bindTestEvents).
+function runBackgroundTest(api) {
+  return new Promise((resolve) => {
+    // Minuteur de secours : si l'événement de fin n'arrive jamais, on
+    // ne laisse pas « Test en cours… » figé.
+    testWatchdog = setTimeout(() => {
+      testWatchdog = null;
+      pendingTestResolve = null;
+      activeTestId = null;
+      setStatus(TEST_TIMEOUT_MESSAGE, true);
+      resolve();
+    }, TEST_WATCHDOG_MS);
+    pendingTestResolve = (payload) => {
+      if (testWatchdog) { clearTimeout(testWatchdog); testWatchdog = null; }
+      if (payload && payload.ok) {
+        setStatus(`Connexion OK : le fournisseur a répondu « ${payload.answer} ».${formatDurations(payload.durations)}`);
+      } else if (payload) {
+        setStatus(`${payload.error || 'Le test a échoué.'}${formatDurations(payload.durations)}`, true);
+      }
+      resolve();
+    };
+    api.testStart().then((res) => {
+      if (!res || !res.ok) {
+        // Démarrage refusé (un test est déjà en cours, ou autre) :
+        // aucun événement de fin n'arrivera, on n'attend pas.
+        if (testWatchdog) { clearTimeout(testWatchdog); testWatchdog = null; }
+        pendingTestResolve = null;
+        activeTestId = null;
+        setStatus((res && res.error) || 'Impossible de lancer le test.', true);
+        resolve();
+        return;
+      }
+      activeTestId = res.testId;
+      setStatus('Test en cours… Préparation… (0,0 s)');
+    }).catch(() => {
+      if (testWatchdog) { clearTimeout(testWatchdog); testWatchdog = null; }
+      pendingTestResolve = null;
+      activeTestId = null;
+      setStatus('Impossible de lancer le test.', true);
+      resolve();
+    });
+  });
+}
+
 function bind() {
+  const api = aiApi();
+  if (api) bindTestEvents(api);
   $('aiProvider').addEventListener('change', (e) => {
     fillProviderDefaults(e.target.value, { force: true });
   });
@@ -255,36 +371,27 @@ function bind() {
     testing = true;
     if (btn) btn.disabled = true;
     try {
-      setStatus('Test en cours…');
-      // Deux essais au maximum, et seulement en cas de dépassement de
-      // délai (réseau trop lent ou appel IPC sans réponse — voir
-      // isTestTimeout). Une clé refusée ou un modèle inconnu ne donne
-      // pas droit à un nouvel essai : réessayer ne servirait à rien.
-      // Chaque essai est un appel IPC distinct, donc chacun reste sous
-      // la limite de 30 s d'Electron ; le statut dit ce qui se passe,
-      // jamais de silence.
-      for (let attempt = 0; attempt < 2; attempt++) {
-        let res;
-        try {
-          res = await withTimeout(api.test(), TEST_TIMEOUT_MS, TEST_TIMEOUT_MESSAGE);
-        } catch (err) {
-          if (attempt === 0 && (err.isTimeout || isNoReply(err))) {
-            setStatus('Le test n’a pas répondu, nouvel essai…');
-            continue;
-          }
-          setStatus((err && (err.isTimeout || isNoReply(err))) ? TEST_TIMEOUT_MESSAGE : 'Le test a échoué. Réessayez.', true);
-          return;
-        }
-        if (res && res.ok) {
-          setStatus(`Connexion OK : le fournisseur a répondu « ${res.answer} ».`);
-          return;
-        }
-        if (attempt === 0 && isTestTimeout(res)) {
-          setStatus('La réponse tarde, nouvel essai…');
-          continue;
-        }
-        setStatus((res && res.error) || 'Le test a échoué.', true);
+      // Mécanisme de fond (v1.2.6) : ai:test-start rend un testId tout
+      // de suite, la progression et le résultat arrivent par événements
+      // — plus de boucle d'essais, plus de coupure à 30 s, et chaque
+      // étape dit où en est le test et depuis combien de temps.
+      if (typeof api.testStart === 'function' && typeof api.onTestProgress === 'function' && typeof api.onTestDone === 'function') {
+        await runBackgroundTest(api);
         return;
+      }
+      // Repli (ancien préchargeur) : un seul appel direct.
+      setStatus('Test en cours…');
+      let res;
+      try {
+        res = await withTimeout(api.test(), TEST_WATCHDOG_MS, TEST_TIMEOUT_MESSAGE);
+      } catch (err) {
+        setStatus(TEST_TIMEOUT_MESSAGE, true);
+        return;
+      }
+      if (res && res.ok) {
+        setStatus(`Connexion OK : le fournisseur a répondu « ${res.answer} ».${formatDurations(res.durations)}`);
+      } else {
+        setStatus(`${(res && res.error) || 'Le test a échoué.'}${formatDurations(res && res.durations)}`, true);
       }
     } finally {
       testing = false;
@@ -340,6 +447,8 @@ window.__pohAiSettings = {
     updateAutoChecked: $('updateAutoCheck') ? $('updateAutoCheck').checked : null,
     updateCheckNowPresent: Boolean($('updateCheckNowBtn')),
     updateStatus: $('updateSettingsStatus') ? $('updateSettingsStatus').textContent : '',
+    installedVersion: $('installedVersionLabel') ? $('installedVersionLabel').textContent : '',
+    updateDetail: $('updateDetail') ? $('updateDetail').textContent : '',
   }),
   save: async (values) => {
     if (values.provider) { $('aiProvider').value = values.provider; fillProviderDefaults(values.provider, { force: true }); }

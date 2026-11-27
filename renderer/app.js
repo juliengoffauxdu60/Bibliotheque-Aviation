@@ -1209,6 +1209,56 @@ function handleUpdateStatus(payload) {
 {
   const api = updateApi();
   if (api && typeof api.onStatus === 'function') api.onStatus(handleUpdateStatus);
+  refreshInstalledVersion();
+  const checkBtn = $('updateCheckBtn');
+  if (checkBtn) checkBtn.addEventListener('click', (e) => checkUpdatesFromHeader(e.currentTarget));
+}
+
+// Version installée affichée sous le titre (v1.2.6) + bouton
+// « Vérifier les mises à jour » dans l'en-tête : le même IPC que la
+// bannière, le résultat s'affiche dans la bannière existante.
+async function refreshInstalledVersion() {
+  const label = $('appVersionLabel');
+  const api = updateApi();
+  if (!label || !api || typeof api.getVersion !== 'function') return;
+  try {
+    const version = await api.getVersion();
+    if (typeof version === 'string' && version) {
+      label.textContent = `Version ${version}`;
+      updateState.currentVersion = version;
+    }
+  } catch { /* le libellé reste vide, la bannière reste la source */ }
+}
+async function checkUpdatesFromHeader(btn) {
+  const api = updateApi();
+  if (!api) return;
+  if (btn) btn.disabled = true;
+  try {
+    const res = await api.checkNow();
+    if (res && res.available) {
+      updateState.available = true;
+      updateState.version = res.version || '';
+      updateState.currentVersion = res.currentVersion || updateState.currentVersion;
+      updateState.ready = false;
+      updateState.error = '';
+      showUpdateBanner(
+        `Une mise à jour est disponible : version ${updateState.version}.`,
+        'Mettre à jour',
+        () => startUpdateDownload(),
+      );
+    } else {
+      updateState.available = false;
+      updateState.error = '';
+      const current = updateState.currentVersion || (res && res.currentVersion) || '';
+      showUpdateBanner(current ? `L’application est à jour (version ${current}).` : 'L’application est à jour.');
+    }
+  } catch (e) {
+    updateState.error = (e && e.message) || 'Impossible de vérifier les mises à jour.';
+    showUpdateBanner(updateState.error);
+  } finally {
+    if (btn) btn.disabled = false;
+    if (btn) btn.blur();
+  }
 }
 
 // API pour l'auto-test (main.js, POH_SELFTEST=1) — état réel de la
@@ -1224,6 +1274,16 @@ window.__pohUpdate = {
     const api = updateApi();
     if (!api) return Promise.reject(new Error('La fonction de mise à jour n’est pas branchée dans cette application.'));
     return api.checkNow();
+  },
+  versionLabel: () => {
+    const el = $('appVersionLabel');
+    return el ? el.textContent : '';
+  },
+  checkViaHeaderButton: () => {
+    const btn = $('updateCheckBtn');
+    if (!btn) return Promise.reject(new Error('Bouton de vérification absent.'));
+    btn.click();
+    return Promise.resolve(true);
   },
   download: () => startUpdateDownload(),
   install: () => installUpdate(),

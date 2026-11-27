@@ -405,6 +405,65 @@ check('tester trop lent : ai:test clé refusée -> échec sans code timeout', [r
 check('tester trop lent : ai:test clé refusée -> message lisible', typeof res.error === 'string' && res.error.includes('refusée'), true);
 globalThis.fetch = realFetchForSection10;
 
+// 12. Test de connexion en tâche de fond (v1.2.6) : ai:test-start rend
+// un testId tout de suite, la progression arrive par événements
+// (étapes datées), le résultat par ai:test-done (avec les durées
+// mesurées). Un seul test à la fois : un deuxième démarrage pendant
+// qu'un test tourne est refusé. ai:test (invoke) reste compatible et
+// renvoie aussi les durées.
+{
+  const sent = [];
+  const fakeEvent = { sender: { send: (channel, payload) => { sent.push([channel, payload]); } } };
+  const startTest = (event) => ipcHandlers.get('ai:test-start')(event);
+  const waitForDone = async (testId, timeoutMs = 5000) => {
+    const t0 = Date.now();
+    for (;;) {
+      const done = sent.find(([ch, p]) => ch === 'ai:test-done' && p.testId === testId);
+      if (done) return done[1];
+      if (Date.now() - t0 > timeoutMs) return null;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+  };
+  await callIpc('ai:save-settings', { provider: 'gemini', model: 'gemini-3.8-flash', endpoint: PROVIDERS.gemini.defaultEndpoint, key: FAUSSE_CLE_GEMINI });
+  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: 'OK' }] } }] }) });
+  const started = startTest(fakeEvent);
+  check('test de fond : démarrage OK avec testId', started.ok === true && typeof started.testId === 'string' && started.testId.length > 0, true);
+  const done = await waitForDone(started.testId);
+  check('test de fond : événement done reçu', done !== null, true);
+  const steps = sent.filter(([ch, p]) => ch === 'ai:test-progress' && p.testId === started.testId).map(([, p]) => p.step);
+  check('test de fond : étapes preparation/key/request dans l’ordre', steps, ['preparation', 'key', 'request']);
+  const elapsedOk = sent.filter(([ch, p]) => ch === 'ai:test-progress' && p.testId === started.testId)
+    .every(([, p]) => typeof p.elapsedMs === 'number' && p.elapsedMs >= 0);
+  check('test de fond : chaque progression porte un temps écoulé', elapsedOk, true);
+  check('test de fond : résultat OK', done && done.ok, true);
+  check('test de fond : durées mesurées présentes', done && ['keyMs', 'networkMs', 'totalMs'].every((k) => typeof done.durations[k] === 'number' && done.durations[k] >= 0), true);
+
+  // Garde de concurrence : un test lent tourne, un deuxième démarrage
+  // est refusé, puis la garde se libère quand le test finit.
+  let releaseFetch;
+  const deferredFetch = new Promise((resolve) => { releaseFetch = resolve; });
+  globalThis.fetch = () => deferredFetch;
+  sent.length = 0;
+  const slow = startTest(fakeEvent);
+  check('test de fond : démarrage du test lent OK', slow.ok, true);
+  const refused = startTest(fakeEvent);
+  check('test de fond : deuxième démarrage refusé pendant un test', [refused.ok, typeof refused.error === 'string' && refused.error.includes('déjà en cours')], [false, true]);
+  releaseFetch({ ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: 'OK' }] } }] }) });
+  const slowDone = await waitForDone(slow.testId);
+  check('test de fond : le test lent finit', slowDone !== null && slowDone.ok, true);
+  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: 'OK' }] } }] }) });
+  const again = startTest(fakeEvent);
+  check('test de fond : nouveau démarrage possible après la fin', again.ok, true);
+  await waitForDone(again.testId);
+  globalThis.fetch = realFetchForSection10;
+
+  // Compatibilité ai:test (invoke) : mêmes durées, réponse directe.
+  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: 'OK' }] } }] }) });
+  res = await callIpc('ai:test');
+  check('compatibilité : ai:test réussit et renvoie les durées', res.ok === true && ['keyMs', 'networkMs', 'totalMs'].every((k) => typeof res.durations[k] === 'number'), true);
+  globalThis.fetch = realFetchForSection10;
+}
+
 // Nettoyage du dossier temporaire du faux Electron.
 fs.rmSync(electronStub.userDataDir, { recursive: true, force: true });
 

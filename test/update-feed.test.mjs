@@ -11,7 +11,7 @@ import {
   UPDATE_FEED, UpdateError, feedBase, latestYmlUrl, assetUrl,
   fetchText, parseLatestYml, compareVersions, isNewer,
   pickUpdateFile, sha512File, verifySha512, downloadFile,
-  checkForUpdate,
+  checkForUpdate, sanitizeErrorDetail,
 } from '../main/update-feed.js';
 import { startFakeFeed } from '../scripts/fake-update-feed.mjs';
 
@@ -183,6 +183,19 @@ try {
   await feed.stop();
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* nettoyage */ }
 }
+
+// 7. Détail d'erreur assaini (v1.2.6) : code + message, tronqué, secrets
+// masqués — jamais un jeton ou une clé en clair dans l'affichage.
+check('détail : vide pour une erreur nulle', sanitizeErrorDetail(null), '');
+check('détail : code + message', sanitizeErrorDetail(Object.assign(new Error('boom réseau'), { code: 'ENOTFOUND' })), 'ENOTFOUND — boom réseau');
+check('détail : jeton ghp_ masqué', sanitizeErrorDetail(new Error('échec ghp_abcdef1234567890')),'échec [masqué]');
+check('détail : jeton github_pat_ masqué', sanitizeErrorDetail(new Error('clé github_pat_11ABCDEFG0abcXYZ')),'clé [masqué]');
+check('détail : clé sk- masquée', sanitizeErrorDetail(new Error('Authorization sk-abc123XYZ')),'Authorization [masqué]');
+check('détail : en-tête Bearer masqué', sanitizeErrorDetail(new Error('Bearer abcdef123456')),'Bearer [masqué]');
+check('détail : tronqué à 200 caractères + …', sanitizeErrorDetail(new Error('x'.repeat(300))).length, 201);
+check('détail : UpdateError porte son détail', new UpdateError('convivial', 'cause technique').detail, 'cause technique');
+check('détail : UpdateError garde son message convivial', new UpdateError('convivial', 'cause technique').userMessage, 'convivial');
+check('détail : UpdateError sans détail reste vide', new UpdateError('convivial').detail, '');
 
 console.log(failures === 0
   ? `\nTOUS LES TESTS PASSENT (${skipped} passé(s))`

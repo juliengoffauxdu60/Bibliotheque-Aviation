@@ -274,48 +274,110 @@ export function registerAiHandlers() {
     }
   });
 
-  ipcMain.handle('ai:test', async () => {
+  // --- Test de connexion en tâche de fond (v1.2.6) -------------------
+  // Le test ne passe PLUS par une réponse IPC : Electron rejette un
+  // appel sans réponse au bout de ~30 s (« reply was never sent »),
+  // et l'ancien test (28 s + 2 essais) échouait par dépassement de
+  // délai sans dire où ça bloquait. Maintenant `ai:test-start` rend
+  // un testId tout de suite, le travail se fait en arrière-plan avec
+  // un budget de 120 s, et chaque étape est datée : la progression
+  // arrive par `ai:test-progress` (étape + temps écoulé), le résultat
+  // par `ai:test-done` (ok/erreur + durées mesurées : lecture de la
+  // clé, appel réseau, total). La clé n'est jamais journalisée ni
+  // renvoyée — seules des durées et des messages en français partent
+  // vers le rendu. `ai:test` (invoke) reste pour compatibilité
+  // (tests Node, harnais E2E) avec l'ancien budget de 28 s.
+  const AI_TEST_BUDGET_MS = 120000;
+  let aiTestCounter = 0;
+  let runningAiTest = null; // { testId, promise } — un seul test à la fois
+
+  function emitToSender(event, channel, payload) {
     try {
+      const sender = event && event.sender;
+      if (sender && typeof sender.send === 'function') sender.send(channel, payload);
+    } catch { /* fenêtre fermée : le résultat reste lisible via ai:test */ }
+  }
+
+  async function runAiTest({ timeoutMs, onProgress }) {
+    const t0 = Date.now();
+    const elapsed = () => Date.now() - t0;
+    const durations = { keyMs: 0, networkMs: 0, totalMs: 0 };
+    const progress = (step) => { try { onProgress && onProgress(step, elapsed()); } catch { /* jamais bloquant */ } };
+    try {
+      progress('preparation');
       const stored = loadStored();
       const def = PROVIDERS[stored.provider];
       if (!def) {
-        return { ok: false, error: 'Aucune IA n’est configurée. Choisissez un fournisseur et enregistrez une clé, puis testez de nouveau.' };
+        durations.totalMs = elapsed();
+        return { ok: false, error: 'Aucune IA n’est configurée. Choisissez un fournisseur et enregistrez une clé, puis testez de nouveau.', durations };
       }
       const entry = stored.providers[stored.provider] || emptyEntry();
-      // Usage réel : le déchiffrement a lieu ici (voir ai:ask).
+      // Usage réel : le déchiffrement a lieu ici (l'invite du trousseau,
+      // s'il y en a une, n'apparaît qu'à ce moment — jamais à l'affichage).
       // Attention : safeStorage.decryptString est synchrone et, sur macOS,
       // peut attendre l'invite du trousseau — aucun délai ne peut le
-      // borner ici. Deux bornes protègent quand même l'utilisateur :
-      //  - l'appel réseau ci-dessous (TEST_TIMEOUT_MS, 28 s — voir
-      //    renderer/ai-providers.js) : il reste SOUS la limite de
-      //    30 s d'Electron pour un appel IPC (au-delà, l'appel est rejeté
-      //    avec « reply was never sent » — prouvé par reproduction).
-      //    28 s et pas 20 s : Google a mis 24 s à répondre le 15 nov.
-      //    2026 (même pour refuser une mauvaise clé) — avec 20 s le
-      //    test échouait alors que tout était bien configuré. Le bouton
-      //    Tester réessaie une fois en cas de dépassement de délai
-      //    (renderer/ai-settings.js, isTestTimeout) ;
-      //  - côté rendu, le bouton Tester a son propre délai (45 s, filet de
-      //    sécurité) et traduit « reply was never sent » en message clair
-      //    qui mentionne le trousseau.
-      const key = decryptKeyEntry(entry);
+      // borner ici ; c'est exactement ce que l'étape « key » et sa durée
+      // permettent de voir.
+      const keyStart = Date.now();
+      let key;
+      try {
+        key = decryptKeyEntry(entry);
+      } finally {
+        durations.keyMs = Date.now() - keyStart;
+      }
       refreshMaskedKey(stored, key);
-      const answer = await callProvider({
-        provider: stored.provider,
-        model: entry.model || def.defaultModel,
-        endpoint: entry.endpoint || def.defaultEndpoint,
-        key,
-      }, 'Réponds uniquement par le mot OK.', undefined, { timeoutMs: TEST_TIMEOUT_MS });
-      return { ok: true, answer: answer.slice(0, 200) };
+      progress('key');
+      progress('request');
+      const netStart = Date.now();
+      let answer;
+      try {
+        answer = await callProvider({
+          provider: stored.provider,
+          model: entry.model || def.defaultModel,
+          endpoint: entry.endpoint || def.defaultEndpoint,
+          key,
+        }, 'Réponds uniquement par le mot OK.', undefined, { timeoutMs });
+      } finally {
+        durations.networkMs = Date.now() - netStart;
+      }
+      durations.totalMs = elapsed();
+      return { ok: true, answer: answer.slice(0, 200), durations };
     } catch (e) {
-      const error = (e && e.userMessage) || 'Le test a échoué. Réessayez.';
-      const out = { ok: false, error };
-      // Le code « timeout » dit au rendu que le test peut être réessayé
-      // une fois (voir isTestTimeout) — il n'est renvoyé que pour un
-      // dépassement de délai, jamais pour une clé refusée ou autre.
+      durations.totalMs = elapsed();
+      const out = { ok: false, error: (e && e.userMessage) || 'Le test a échoué. Réessayez.', durations };
+      // Le code « timeout » dit au rendu que c'est un dépassement de
+      // délai — il n'est renvoyé que pour ça, jamais pour une clé
+      // refusée ou un modèle inconnu.
       if (e && e.code) out.code = e.code;
       return out;
     }
+  }
+
+  ipcMain.handle('ai:test-start', (event) => {
+    if (runningAiTest) {
+      return { ok: false, error: 'Un test de connexion est déjà en cours. Attendez son résultat.' };
+    }
+    const testId = `ai-test-${++aiTestCounter}`;
+    const job = (async () => {
+      try {
+        const emitProgress = (step, elapsedMs) => emitToSender(event, 'ai:test-progress', { testId, step, elapsedMs });
+        const result = await runAiTest({ timeoutMs: AI_TEST_BUDGET_MS, onProgress: emitProgress });
+        emitToSender(event, 'ai:test-done', { testId, ...result });
+        return result;
+      } finally {
+        if (runningAiTest && runningAiTest.testId === testId) runningAiTest = null;
+      }
+    })();
+    runningAiTest = { testId, promise: job };
+    job.catch(() => { /* l'erreur est déjà dans l'événement done */ });
+    return { ok: true, testId };
+  });
+
+  ipcMain.handle('ai:test', async () => {
+    // Compatibilité (tests Node, harnais E2E) : même moteur, ancien
+    // budget de 28 s, réponse directe. La page Réglages utilise
+    // ai:test-start et ne passe plus par ici.
+    return runAiTest({ timeoutMs: TEST_TIMEOUT_MS });
   });
 
   ipcMain.handle('ai:open-settings', () => {

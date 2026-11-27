@@ -28,7 +28,8 @@ const updateFeed = fs.readFileSync(path.join(appRoot, 'main', 'update-feed.js'),
 const macUpdate = fs.readFileSync(path.join(appRoot, 'main', 'mac-update.js'), 'utf8');
 
 // 1. Version et dépendances.
-check('version 1.2.5', pkg.version, '1.2.5');
+check('version 1.2.6', pkg.version, '1.2.6');
+check('licence GPL-3.0 dans package.json', pkg.license, 'GPL-3.0');
 check('electron-updater en dépendances', typeof pkg.dependencies['electron-updater'] === 'string', true);
 
 // 2. Zéro artefact (invariant v1.2.4, 17 nov. 2026) — le quota GitHub
@@ -118,6 +119,54 @@ check('Réglages : case « Vérifier automatiquement »', settingsHtml.includes(
 check('Réglages : bouton « Vérifier maintenant »', settingsHtml.includes('id="updateCheckNowBtn"'), true);
 const indexHtml = fs.readFileSync(path.join(appRoot, 'renderer', 'index.html'), 'utf8');
 check('page principale : bannière de mise à jour', indexHtml.includes('id="updateBanner"'), true);
+check('page principale : libellé de version', indexHtml.includes('id="appVersionLabel"'), true);
+check('page principale : bouton « Vérifier les mises à jour »', indexHtml.includes('id="updateCheckBtn"'), true);
+const appJs = fs.readFileSync(path.join(appRoot, 'renderer', 'app.js'), 'utf8');
+check('app.js : version lue par IPC (getVersion)', appJs.includes('getVersion()') && appJs.includes('appVersionLabel'), true);
+check('app.js : bouton d’en-tête câblé (updateCheckBtn)', appJs.includes("getElementById('updateCheckBtn')") || appJs.includes("$('updateCheckBtn')"), true);
+
+// 10. Version affichée (v1.2.6) : plus aucune version en dur côté
+// rendu — la vraie version vient du processus principal (IPC).
+check('preload : update:get-version', preload.includes('update:get-version'), true);
+check('preload : plus de version en dur 1.0.0', !preload.includes("version: '1.0.0'"), true);
+check('main-update.js : IPC update:get-version', mainUpdate.includes("ipcMain.handle('update:get-version'"), true);
+check('main-update.js : détail d’erreur assaini (sanitizeErrorDetail)', mainUpdate.includes('sanitizeErrorDetail'), true);
+check('main-update.js : détail transmis au statut d’erreur', mainUpdate.includes("sendStatus({ type: 'error', message, detail: detail || undefined })"), true);
+const aiSettingsJs = fs.readFileSync(path.join(appRoot, 'renderer', 'ai-settings.js'), 'utf8');
+check('Réglages : test de fond (ai:test-start)', aiSettingsJs.includes('testStart') && aiSettingsJs.includes('ai:test-start'), true);
+check('Réglages : progression du test écoutée', aiSettingsJs.includes('onTestProgress') && aiSettingsJs.includes('bindTestEvents'), true);
+check('Réglages : fin du test écoutée', aiSettingsJs.includes('onTestDone') && aiSettingsJs.includes('pendingTestResolve'), true);
+check('preload : canaux ai:test-progress / ai:test-done', preload.includes('ai:test-progress') && preload.includes('ai:test-done'), true);
+check('Réglages : plus de boucle de 2 essais', !aiSettingsJs.includes('attempt < 2'), true);
+check('Réglages : libellé version installée', settingsHtml.includes('id="installedVersionLabel"'), true);
+check('Réglages : ligne de détail d’erreur', settingsHtml.includes('id="updateDetail"'), true);
+const mainAi = fs.readFileSync(path.join(appRoot, 'main-ai.js'), 'utf8');
+check('main-ai.js : IPC ai:test-start', mainAi.includes("ipcMain.handle('ai:test-start'"), true);
+check('main-ai.js : événements ai:test-progress / ai:test-done', mainAi.includes('ai:test-progress') && mainAi.includes('ai:test-done'), true);
+check('main-ai.js : budget de test 120 s', mainAi.includes('AI_TEST_BUDGET_MS = 120000') || mainAi.includes('120000'), true);
+check('main-ai.js : ai:test conservé (compatibilité)', mainAi.includes("ipcMain.handle('ai:test'"), true);
+
+// 11. Licence et page projet (v1.2.6) : fichiers présents, licence
+// complète, page bilingue, modèles simples, phrase d'accord présente.
+const licenseText = fs.readFileSync(path.join(appRoot, 'LICENSE'), 'utf8');
+check('LICENSE : titre GPL', licenseText.includes('GNU GENERAL PUBLIC LICENSE'), true);
+check('LICENSE : version 3 du 29 juin 2007', licenseText.includes('Version 3, 29 June 2007'), true);
+check('LICENSE : fin des conditions', licenseText.includes('END OF TERMS AND CONDITIONS'), true);
+check('LICENSE : 18 sections (0 à 17)', ['0. Definitions', '17. Interpretation'].every((s) => licenseText.includes(s)), true);
+const readme = fs.readFileSync(path.join(appRoot, 'README.md'), 'utf8');
+check('README : partie française d’abord (téléchargement en tête)', readme.indexOf('Télécharger et installer') < readme.indexOf('# Bibliothèque Aviation (English version)'), true);
+check('README : traduction anglaise complète', readme.includes('Download and install the application'), true);
+check('README : aucune commande dans la partie utilisateurs', !readme.slice(0, readme.indexOf('Pour les développeurs')).includes('npm install'), true);
+check('README : développeurs en dernière partie', readme.includes('Pour les développeurs') && readme.includes('For developers'), true);
+const contributing = fs.readFileSync(path.join(appRoot, 'CONTRIBUTING.md'), 'utf8');
+check('CONTRIBUTING : phrase d’accord FR', contributing.includes('je conserve mes droits sur mon code'), true);
+check('CONTRIBUTING : phrase d’accord EN', contributing.includes('I keep my rights to my code'), true);
+check('CONTRIBUTING : traduction anglaise', contributing.includes('Contributing — Bibliothèque Aviation (English version)'), true);
+for (const f of ['.github/ISSUE_TEMPLATE/bug-report.md', '.github/ISSUE_TEMPLATE/suggestion.md', '.github/PULL_REQUEST_TEMPLATE.md']) {
+  check(`modèle présent : ${f}`, fs.existsSync(path.join(appRoot, f)), true);
+}
+const prTemplate = fs.readFileSync(path.join(appRoot, '.github', 'PULL_REQUEST_TEMPLATE.md'), 'utf8');
+check('modèle PR : case à cocher pour l’accord', prTemplate.includes('je conserve mes droits sur mon code'), true);
 
 console.log(failures === 0
   ? `\nTOUS LES TESTS PASSENT (${skipped} passé(s))`
