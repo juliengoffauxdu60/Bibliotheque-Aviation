@@ -1,5 +1,7 @@
 # Bibliothèque Aviation
 
+<img src="build/icon.png" alt="Icône de la Bibliothèque Aviation" width="120">
+
 > **English version below** — la version anglaise est plus bas dans cette même page.
 
 La Bibliothèque Aviation est une application pour chercher des mots dans vos
