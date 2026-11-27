@@ -28,7 +28,7 @@ const updateFeed = fs.readFileSync(path.join(appRoot, 'main', 'update-feed.js'),
 const macUpdate = fs.readFileSync(path.join(appRoot, 'main', 'mac-update.js'), 'utf8');
 
 // 1. Version et dépendances.
-check('version 1.2.7', pkg.version, '1.2.7');
+check('version 1.2.8', pkg.version, '1.2.8');
 check('licence GPL-3.0 dans package.json', pkg.license, 'GPL-3.0');
 check('electron-updater en dépendances', typeof pkg.dependencies['electron-updater'] === 'string', true);
 
