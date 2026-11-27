@@ -10,8 +10,7 @@ Vous tapez un mot, l'application vous montre les pages où il se trouve, et vous
 lisez la page dans le document. L'application fonctionne sans Internet pour la
 recherche. Elle marche sur Windows et sur Mac, de la même façon.
 
-**Responsable du projet :** Julien Goffaux. C'est lui qui décide seul ce qui
-entre dans le projet.
+**Responsable du projet :** Julien Goffaux.
 
 **Licence :** GPL-3.0. En une phrase : tout le monde peut utiliser, modifier et
 partager ce logiciel, à condition de partager les modifications sous la même
@@ -203,8 +202,7 @@ comment l'application est faite. Il faut seulement un compte GitHub gratuit
 Vous avez une idée pour améliorer l'application ? Faites comme pour un
 problème, mais choisissez le modèle **Proposer une idée** à l'étape 5.
 Décrivez votre idée simplement : ce que vous voudriez faire, et pourquoi ce
-serait utile. Julien lit les idées régulièrement et décide ce qui entre dans
-le projet.
+serait utile. Julien lit les idées régulièrement.
 
 ---
 
@@ -220,7 +218,7 @@ sont expliquées une par une dans le fichier `CONTRIBUTING.md`. En résumé :
    appelle une « pull request » : une demande d'ajout).
 4. Décrivez ce que vous avez changé, et cochez la case qui dit que vous
    acceptez les règles de contribution (voir `CONTRIBUTING.md`).
-5. Julien lit votre demande et décide seul si elle entre dans le projet.
+5. Julien lit votre demande et vous répond.
 
 ---
 
@@ -263,7 +261,7 @@ application shows you the pages where it appears, and you read the page in the
 document. Searching works without Internet. The application runs on Windows and
 on Mac, in the same way.
 
-**Project lead:** Julien Goffaux. He alone decides what goes into the project.
+**Project lead:** Julien Goffaux.
 
 **Licence:** GPL-3.0. In one sentence: everyone may use, modify and share this
 software, provided that modifications are shared under the same licence. The
@@ -452,7 +450,7 @@ password on the GitHub website).
 You have an idea to improve the application? Do the same as for a problem,
 but choose the **Proposer une idée** (Suggest an idea) template at step 5.
 Describe your idea simply: what you would like to do, and why it would be
-useful. Julien reads ideas regularly and decides what goes into the project.
+useful. Julien reads ideas regularly.
 
 ---
 
@@ -468,8 +466,7 @@ explained one by one in the `CONTRIBUTING.md` file. In short:
    request": a request to add).
 4. Describe what you changed, and check the box that says you accept the
    contribution rules (see `CONTRIBUTING.md`).
-5. Julien reads your request and alone decides whether it goes into the
-   project.
+5. Julien reads your request and replies to you.
 
 ---
 

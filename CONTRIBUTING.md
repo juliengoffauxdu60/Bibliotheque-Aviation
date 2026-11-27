@@ -6,9 +6,7 @@ Merci de vouloir aider ! Tout le monde peut aider : signaler un problème,
 proposer une idée, ou proposer une modification du code. Cette page explique
 comment faire, étape par étape, avec des mots simples.
 
-**Responsable du projet :** Julien Goffaux. C'est lui qui décide seul ce qui
-entre dans le projet. Proposer quelque chose ne veut pas dire que ce sera
-accepté : Julien lit chaque proposition et décide.
+**Responsable du projet :** Julien Goffaux.
 
 **Licence du projet :** GPL-3.0 (voir le fichier `LICENSE`). En une phrase :
 tout le monde peut utiliser, modifier et partager ce logiciel, à condition de
@@ -120,9 +118,7 @@ Thank you for wanting to help! Everyone can help: report a problem, suggest
 an idea, or propose a code change. This page explains how, step by step, in
 simple words.
 
-**Project lead:** Julien Goffaux. He alone decides what goes into the
-project. Proposing something does not mean it will be accepted: Julien reads
-every proposal and decides.
+**Project lead:** Julien Goffaux.
 
 **Project licence:** GPL-3.0 (see the `LICENSE` file). In one sentence:
 everyone may use, modify and share this software, provided that modifications
